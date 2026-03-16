@@ -1,0 +1,963 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>智慧化实验室管理系统 · 原型</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <aside class="sidebar" aria-label="主导航">
+        <div class="brand">
+          <div class="brand__logo" aria-hidden="true">LAB</div>
+          <div class="brand__text">
+            <div class="brand__title">智慧化实验室</div>
+            <div class="brand__sub">管理系统 · 原型</div>
+          </div>
+        </div>
+
+        <nav class="nav">
+          <a class="nav__item is-active" href="#/home" data-route="home">
+            <span class="nav__dot" aria-hidden="true"></span>
+            首页全局看板
+          </a>
+          <div class="nav__section">模块</div>
+          <a class="nav__item" href="#/module/qc-seq" data-route="qc-seq">
+            <span class="nav__dot" aria-hidden="true"></span>
+            测序下机数据质控
+          </a>
+          <a class="nav__item" href="#/module/qc-result" data-route="qc-result">
+            <span class="nav__dot" aria-hidden="true"></span>
+            检测结果质量控制
+          </a>
+          <a class="nav__item" href="#/module/productivity" data-route="productivity">
+            <span class="nav__dot" aria-hidden="true"></span>
+            人效分析
+          </a>
+          <a class="nav__item" href="#/module/plot-service" data-route="plot-service">
+            <span class="nav__dot" aria-hidden="true"></span>
+            科研画图服务
+          </a>
+        </nav>
+
+        <div class="sidebar__footer">
+          <div class="status">
+            <span class="status__pill" id="rtPill" title="模拟实时状态">实时：运行中</span>
+            <span class="status__meta" id="nowText">--</span>
+          </div>
+          <div class="hint">
+            提示：这是可点击的原型页面，数据为模拟实时刷新。
+          </div>
+        </div>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <div class="topbar__left">
+            <div class="page-title" id="pageTitle">首页全局看板</div>
+            <div class="page-sub" id="pageSub">样本总览与流程滞留实时监控</div>
+          </div>
+          <div class="topbar__right">
+            <button class="btn btn--ghost" id="btnPause" type="button">暂停刷新</button>
+            <button class="btn" id="btnReset" type="button">重置模拟</button>
+          </div>
+        </header>
+
+        <section class="content">
+          <section class="view is-active" id="view-home" data-view="home">
+            <div class="grid grid--cards">
+              <div class="card kpi kpi--primary">
+                <div class="kpi__head">
+                  <div class="kpi__label">今日样本总数</div>
+                  <div class="kpi__badge">Today</div>
+                </div>
+                <div class="kpi__value" id="kpiTotal">--</div>
+                <div class="kpi__foot">
+                  <span class="kpi__trend" id="kpiTotalTrend">--</span>
+                  <span class="kpi__muted">较昨日</span>
+                </div>
+              </div>
+
+              <div class="card kpi">
+                <div class="kpi__head">
+                  <div class="kpi__label">在测样本数</div>
+                  <div class="kpi__badge kpi__badge--info">运行</div>
+                </div>
+                <div class="kpi__value" id="kpiRunning">--</div>
+                <div class="kpi__foot">
+                  <span class="kpi__muted">当前流程中的样本</span>
+                </div>
+              </div>
+
+              <div class="card kpi">
+                <div class="kpi__head">
+                  <div class="kpi__label">已发布样本数量</div>
+                  <div class="kpi__badge kpi__badge--ok">发布</div>
+                </div>
+                <div class="kpi__value" id="kpiPublished">--</div>
+                <div class="kpi__foot">
+                  <span class="kpi__muted">今日累计</span>
+                </div>
+              </div>
+
+              <div class="card kpi">
+                <div class="kpi__head">
+                  <div class="kpi__label">异常样本数</div>
+                  <div class="kpi__badge kpi__badge--warn">预警</div>
+                </div>
+                <div class="kpi__value" id="kpiAbnormal">--</div>
+                <div class="kpi__foot">
+                  <span class="kpi__muted">需关注/退回/补充</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="grid grid--three">
+              <div class="card">
+                <div class="card__head">
+                  <div class="card__title">异常分布</div>
+                  <div class="card__tools">
+                    <div class="pill pill--muted">Top 5</div>
+                  </div>
+                </div>
+                <div class="card__body">
+                  <div class="bars" id="abnormalBars"></div>
+                </div>
+              </div>
+              <div class="card">
+                <div class="card__head">
+                  <div class="card__title">SLA 告警</div>
+                  <div class="card__tools">
+                    <div class="pill pill--muted">近 24 小时</div>
+                  </div>
+                </div>
+                <div class="card__body">
+                  <div class="alerts" id="alerts"></div>
+                </div>
+              </div>
+              <div class="card">
+                <div class="card__head">
+                  <div class="card__title">今日概览</div>
+                  <div class="card__tools">
+                    <div class="pill pill--muted">汇总</div>
+                  </div>
+                </div>
+                <div class="card__body">
+                  <div class="summary" id="summary"></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="grid grid--two">
+              <div class="card">
+                <div class="card__head">
+                  <div class="card__title">整体样本动态</div>
+                  <div class="card__tools">
+                    <div class="pill" id="sparkHint">最近 60 分钟</div>
+                  </div>
+                </div>
+                <div class="card__body">
+                  <div class="chart">
+                    <canvas id="sparkline" width="920" height="220" aria-label="样本动态折线图"></canvas>
+                  </div>
+                  <div class="mini-metrics">
+                    <div class="mini">
+                      <div class="mini__label">入库</div>
+                      <div class="mini__value" id="miniIn">--</div>
+                    </div>
+                    <div class="mini">
+                      <div class="mini__label">完成</div>
+                      <div class="mini__value" id="miniOut">--</div>
+                    </div>
+                    <div class="mini">
+                      <div class="mini__label">净变化</div>
+                      <div class="mini__value" id="miniDelta">--</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="card">
+                <div class="card__head">
+                  <div class="card__title">流程环节滞留</div>
+                  <div class="card__tools">
+                    <div class="pill pill--muted">实时滞留量 + 平均滞留时间</div>
+                  </div>
+                </div>
+                <div class="card__body">
+                  <div class="pipeline" id="pipeline">
+                    <div class="pipe" data-stage="exp">
+                      <div class="pipe__label">实验中</div>
+                      <div class="pipe__bar"><span class="pipe__fill"></span></div>
+                      <div class="pipe__meta">
+                        <span class="pipe__count">--</span>
+                        <span class="pipe__time">--</span>
+                      </div>
+                    </div>
+                    <div class="pipe" data-stage="ana">
+                      <div class="pipe__label">分析中</div>
+                      <div class="pipe__bar"><span class="pipe__fill"></span></div>
+                      <div class="pipe__meta">
+                        <span class="pipe__count">--</span>
+                        <span class="pipe__time">--</span>
+                      </div>
+                    </div>
+                    <div class="pipe" data-stage="bio">
+                      <div class="pipe__label">生信审核中</div>
+                      <div class="pipe__bar"><span class="pipe__fill"></span></div>
+                      <div class="pipe__meta">
+                        <span class="pipe__count">--</span>
+                        <span class="pipe__time">--</span>
+                      </div>
+                    </div>
+                    <div class="pipe" data-stage="rep">
+                      <div class="pipe__label">报告审核中</div>
+                      <div class="pipe__bar"><span class="pipe__fill"></span></div>
+                      <div class="pipe__meta">
+                        <span class="pipe__count">--</span>
+                        <span class="pipe__time">--</span>
+                      </div>
+                    </div>
+                    <div class="pipe" data-stage="pub">
+                      <div class="pipe__label">已发布</div>
+                      <div class="pipe__bar"><span class="pipe__fill"></span></div>
+                      <div class="pipe__meta">
+                        <span class="pipe__count">--</span>
+                        <span class="pipe__time">--</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="table">
+                    <div class="table__row table__row--head">
+                      <div>环节</div>
+                      <div class="ta-r">滞留样本量</div>
+                      <div class="ta-r">平均滞留时间</div>
+                      <div class="ta-r">P95 滞留时间</div>
+                      <div class="ta-r">风险</div>
+                    </div>
+                    <div id="stageTable"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="view" id="view-qc-seq" data-view="qc-seq">
+            <div class="qc">
+              <div class="qc__head">
+                <div>
+                  <div class="qc__title">测序下机数据质控</div>
+                  <div class="qc__sub">按批次查看下机原始数据、质控品在控、整批次指标分布与单样本明细</div>
+                </div>
+                <div class="qc__filters">
+                  <div class="seg" id="qcBatchSeg" aria-label="按日期切换批次"></div>
+                  <div class="sep"></div>
+                  <div class="field">
+                    <div class="field__label">批次</div>
+                    <select class="select" id="qcBatchSelect" aria-label="选择批次"></select>
+                  </div>
+                </div>
+              </div>
+
+              <div class="grid grid--two qc__grid">
+                <div class="card">
+                  <div class="card__head">
+                    <div class="card__title">① 下机原始数据监控</div>
+                    <div class="card__tools">
+                      <div class="pill pill--muted" id="qcBatchMeta">—</div>
+                    </div>
+                  </div>
+                  <div class="card__body">
+                    <div class="qc-kpis">
+                      <div class="mini">
+                        <div class="mini__label">下机簇密度</div>
+                        <div class="mini__value" id="qcClusterDensity">--</div>
+                        <div class="mini__label qc-mini__hint">K/mm²（均值）</div>
+                      </div>
+                      <div class="mini">
+                        <div class="mini__label">产出数据量</div>
+                        <div class="mini__value" id="qcYieldGb">--</div>
+                        <div class="mini__label qc-mini__hint">Gb（该批次）</div>
+                      </div>
+                      <div class="mini">
+                        <div class="mini__label">拆分后样本数</div>
+                        <div class="mini__value" id="qcDemuxSamples">--</div>
+                        <div class="mini__label qc-mini__hint">Samples</div>
+                      </div>
+                    </div>
+
+                    <div class="qc-split">
+                      <div class="qc-split__left">
+                        <div class="qc-h">拆分后各样本数据产出情况</div>
+                        <div class="qc-note">以 Index 组合热图展示：横轴 I5、纵轴 I7；颜色表示产出（Gb），异常以红色强调。</div>
+                      </div>
+                      <div class="qc-split__right">
+                        <div class="pill pill--muted" id="qcSplitHint">全量</div>
+                      </div>
+                    </div>
+                    <div class="heatmap-wrap">
+                      <div class="heatmap-legend">
+                        <div class="heatmap-legend__item">
+                          <span class="swatch" style="background: rgba(124,92,255,0.25)"></span>
+                          <span>低</span>
+                        </div>
+                        <div class="heatmap-legend__item">
+                          <span class="swatch" style="background: rgba(34,211,238,0.22)"></span>
+                          <span>中</span>
+                        </div>
+                        <div class="heatmap-legend__item">
+                          <span class="swatch" style="background: rgba(45,227,139,0.20)"></span>
+                          <span>高</span>
+                        </div>
+                        <div class="heatmap-legend__item">
+                          <span class="swatch swatch--bad"></span>
+                          <span>异常</span>
+                        </div>
+                        <div class="heatmap-legend__meta" id="qcHeatMeta">—</div>
+                      </div>
+                      <div class="heatmap" id="qcIndexHeatmap" aria-label="I5×I7 Index 产出热图"></div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="card">
+                  <div class="card__head">
+                    <div class="card__title">② 质控品在控情况（阳控 / 阴控）</div>
+                    <div class="card__tools">
+                      <div class="pill pill--muted">按项目汇总</div>
+                    </div>
+                  </div>
+                  <div class="card__body">
+                    <div class="qc-controls" id="qcControls"></div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="card qc__card">
+                <div class="card__head">
+                  <div class="card__title">③ 整批次样本质控信息（按项目分布）</div>
+                  <div class="card__tools">
+                    <div class="pill pill--muted">勾选参数 → 箱型图（每项目一列）</div>
+                  </div>
+                </div>
+                <div class="card__body">
+                  <div class="qc-metrics">
+                    <div class="qc-h">参数</div>
+                    <div class="chips" id="qcMetricChips" role="group" aria-label="选择质控参数"></div>
+                  </div>
+                  <div class="qc-box">
+                    <div class="qc-box__head">
+                      <div class="qc-h" id="qcBoxTitle">—</div>
+                      <div class="qc-note" id="qcBoxNote">—</div>
+                    </div>
+                    <div class="qc-box__grid" id="qcBoxGrid"></div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="card qc__card">
+                <div class="card__head">
+                  <div class="card__title">④ 单个样本质控监控（明细表）</div>
+                  <div class="card__tools">
+                    <div class="field field--inline">
+                      <div class="field__label">样本</div>
+                      <select class="select" id="qcSampleSelect" aria-label="选择样本"></select>
+                    </div>
+                  </div>
+                </div>
+                <div class="card__body">
+                  <div class="qc-sample-meta" id="qcSampleMeta">—</div>
+                  <div class="table table--wide">
+                    <div class="table__row table__row--head table__row--wide">
+                      <div>参数</div>
+                      <div class="ta-r">数值</div>
+                      <div class="ta-r">单位/说明</div>
+                    </div>
+                    <div id="qcSampleTable"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="view" id="view-qc-result" data-view="qc-result">
+            <div class="qc">
+              <div class="qc__head">
+                <div>
+                  <div class="qc__title">检测结果质量控制</div>
+                  <div class="qc__sub">热点变异阳性率、特殊项目指标（MSI/TMB/HRD/LOH）、分级位点统计与趋势监控</div>
+                </div>
+                <div class="qc__filters">
+                  <div class="field">
+                    <div class="field__label">批次</div>
+                    <select class="select" id="qrBatchSelect" aria-label="选择批次"></select>
+                  </div>
+                </div>
+              </div>
+
+              <div class="card qc__card">
+                <div class="card__head">
+                  <div class="card__title">筛选</div>
+                  <div class="card__tools">
+                    <div class="pill pill--muted" id="qrMeta">—</div>
+                  </div>
+                </div>
+                <div class="card__body">
+                  <div class="qr-filters">
+                    <div class="qr-filter">
+                      <div class="qc-h">癌种（可勾选）</div>
+                      <div class="chips" id="qrCancerChips" role="group" aria-label="选择癌种"></div>
+                    </div>
+                    <div class="qr-filter">
+                      <div class="qc-h">变异类型（可勾选）</div>
+                      <div class="chips" id="qrVarTypeChips" role="group" aria-label="选择变异类型"></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="grid grid--two qc__grid">
+                <div class="card">
+                  <div class="card__head">
+                    <div class="card__title">① 本批次热点变异检出情况（表格）</div>
+                    <div class="card__tools">
+                      <div class="pill pill--muted">当日阳性检出率</div>
+                    </div>
+                  </div>
+                  <div class="card__body">
+                    <div class="table table--wide">
+                      <div class="table__row table__row--head qr-row-hot">
+                        <div>癌种</div>
+                        <div class="ta-r">检测样本数</div>
+                        <div class="ta-r">阳性样本数</div>
+                        <div class="ta-r">阳性率</div>
+                      </div>
+                      <div id="qrHotTable"></div>
+                    </div>
+
+                    <div class="qr-split"></div>
+
+                    <div class="qr-filter">
+                      <div class="qc-h">热点位点（先选变异类型，再选位点）</div>
+                      <div class="qr-note">示例位点：EGFR（L858R/T790M/G719S/19DEL/20ins）、EML4-ALK/RET 融合、ERBB2/MET 扩增。</div>
+                      <div class="chips" id="qrVariantChips" role="group" aria-label="选择热点位点"></div>
+                    </div>
+
+                    <div class="qr-split"></div>
+
+                    <div class="table table--wide qr-matrix">
+                      <div class="table__row table__row--head" id="qrVariantMatrixHead"></div>
+                      <div id="qrVariantMatrixBody"></div>
+                    </div>
+
+                    <div class="qr-split"></div>
+
+                    <div class="table table--wide">
+                      <div class="table__row table__row--head qr-row-special">
+                        <div>特殊指标</div>
+                        <div class="ta-r">阳性数</div>
+                        <div class="ta-r">检测数</div>
+                        <div class="ta-r">阳性率</div>
+                      </div>
+                      <div id="qrSpecialTable"></div>
+                    </div>
+
+                    <div class="qr-split"></div>
+
+                    <div class="table table--wide">
+                      <div class="table__row table__row--head qr-row-class">
+                        <div>位点分级</div>
+                        <div class="ta-r">检出位点数</div>
+                        <div class="ta-r">阳性样本数</div>
+                        <div class="ta-r">阳性率</div>
+                      </div>
+                      <div id="qrClassTable"></div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="card">
+                  <div class="card__head">
+                    <div class="card__title">② 月度热点变异阳性率趋势</div>
+                    <div class="card__tools">
+                      <div class="seg" id="qrRangeSeg" aria-label="选择趋势范围"></div>
+                    </div>
+                  </div>
+                  <div class="card__body">
+                    <div class="chart qc-chart">
+                      <canvas id="qrTrend" width="920" height="260" aria-label="阳性率趋势折线图"></canvas>
+                    </div>
+                    <div class="qr-note" id="qrTrendNote">—</div>
+                    <div class="qr-split"></div>
+                    <div class="qc-h">特殊指标分值分布（横轴日期，纵轴分值；红色虚线为阳性 cutoff）</div>
+                    <div class="qr-special-charts qr-special-charts--large">
+                      <div class="qr-special-chart qr-special-chart--full" data-special="MSI">
+                        <div class="qr-special-chart__head">
+                          <span class="qr-special-chart__label">MSI</span>
+                          <button type="button" class="qr-special-chart__zoom" title="放大">放大</button>
+                        </div>
+                        <canvas id="qrSpecialMsi" width="920" height="260" aria-label="MSI 分值趋势"></canvas>
+                      </div>
+                      <div class="qr-special-chart qr-special-chart--full" data-special="TMB">
+                        <div class="qr-special-chart__head">
+                          <span class="qr-special-chart__label">TMB</span>
+                          <button type="button" class="qr-special-chart__zoom" title="放大">放大</button>
+                        </div>
+                        <canvas id="qrSpecialTmb" width="920" height="260" aria-label="TMB 分值趋势"></canvas>
+                      </div>
+                      <div class="qr-special-chart qr-special-chart--full" data-special="HRD">
+                        <div class="qr-special-chart__head">
+                          <span class="qr-special-chart__label">HRD</span>
+                          <button type="button" class="qr-special-chart__zoom" title="放大">放大</button>
+                        </div>
+                        <canvas id="qrSpecialHrd" width="920" height="260" aria-label="HRD 分值趋势"></canvas>
+                      </div>
+                      <div class="qr-special-chart qr-special-chart--full" data-special="LOH">
+                        <div class="qr-special-chart__head">
+                          <span class="qr-special-chart__label">LOH</span>
+                          <button type="button" class="qr-special-chart__zoom" title="放大">放大</button>
+                        </div>
+                        <canvas id="qrSpecialLoh" width="920" height="260" aria-label="LOH 分值趋势"></canvas>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="card qc__card">
+                <div class="card__head">
+                  <div class="card__title">③ 样本检出位点数统计</div>
+                  <div class="card__tools">
+                    <div class="field field--inline">
+                      <div class="field__label">项目</div>
+                      <select class="select" id="qrProjectSelect" aria-label="选择项目"></select>
+                    </div>
+                  </div>
+                </div>
+                <div class="card__body">
+                  <div class="grid grid--two">
+                    <div class="card" style="box-shadow:none; border-color: rgba(255,255,255,0.08);">
+                      <div class="card__head">
+                        <div class="card__title">按项目统计（表格）</div>
+                        <div class="card__tools">
+                          <div class="pill pill--muted">点击或下拉选择项目</div>
+                        </div>
+                      </div>
+                      <div class="card__body">
+                        <div class="table table--wide">
+                          <div class="table__row table__row--head qr-row-proj">
+                            <div>项目</div>
+                            <div class="ta-r">样本数</div>
+                            <div class="ta-r">平均位点数</div>
+                            <div class="ta-r">P95 位点数</div>
+                          </div>
+                          <div id="qrProjectTable"></div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="card" style="box-shadow:none; border-color: rgba(255,255,255,0.08);">
+                      <div class="card__head">
+                        <div class="card__title">所选项目 Top10（位点数）</div>
+                        <div class="card__tools">
+                          <div class="pill pill--muted" id="qrTopMeta">—</div>
+                        </div>
+                      </div>
+                      <div class="card__body">
+                        <div class="table table--wide">
+                          <div class="table__row table__row--head qr-row-top">
+                            <div>样本</div>
+                            <div class="ta-r">位点数</div>
+                            <div class="ta-r">I/II/III 类占比</div>
+                          </div>
+                          <div id="qrTop10Table"></div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="qr-split"></div>
+
+                  <div class="card" style="box-shadow:none; border-color: rgba(255,255,255,0.08);">
+                    <div class="card__head">
+                      <div class="card__title">I / II / III 类位点 VAF 分布（散点图）</div>
+                      <div class="card__tools">
+                        <div class="pill pill--muted">按项目统计 · 按分级着色</div>
+                      </div>
+                    </div>
+                    <div class="card__body">
+                      <div class="chart qc-chart">
+                        <canvas id="qrVafScatter" width="920" height="260" aria-label="VAF 散点图"></canvas>
+                      </div>
+                      <div class="qr-note" id="qrVafNote">—</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="card qc__card">
+                <div class="card__head">
+                  <div class="card__title">按月统计各项目检出位点数分布</div>
+                  <div class="card__tools">
+                    <div class="field field--inline">
+                      <div class="field__label">项目</div>
+                      <select class="select" id="qrMonthlySiteProjectSelect" aria-label="选择项目"></select>
+                    </div>
+                  </div>
+                </div>
+                <div class="card__body">
+                  <div class="chart qc-chart">
+                    <canvas id="qrMonthlySiteChart" width="920" height="260" aria-label="按月检出位点数"></canvas>
+                  </div>
+                  <div class="qr-note">说明：横轴为月份，纵轴为检出位点数；每月份一个箱型图，不随页面自动刷新。</div>
+                </div>
+              </div>
+
+              <div class="card qc__card">
+                <div class="card__head">
+                  <div class="card__title">按月统计各项目 I / II / III 类位点 VAF 分布</div>
+                  <div class="card__tools">
+                    <div class="field field--inline">
+                      <div class="field__label">项目</div>
+                      <select class="select" id="qrMonthlyVafProjectSelect" aria-label="选择项目"></select>
+                    </div>
+                  </div>
+                </div>
+                <div class="card__body">
+                  <div class="chart qc-chart">
+                    <canvas id="qrMonthlyVafChart" width="920" height="260" aria-label="按月 VAF 分布"></canvas>
+                  </div>
+                  <div class="qr-note">说明：横轴为月份，纵轴为 VAF；每月份从左到右依次为 I 类、II 类、III 类箱型图。</div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="view" id="view-productivity" data-view="productivity">
+            <div class="qc">
+              <div class="qc__head">
+                <div>
+                  <div class="qc__title">人效分析</div>
+                  <div class="qc__sub">TAT 流转时间、人员效能、异常样本统计（支持按批次/按月份查看）</div>
+                </div>
+                <div class="qc__filters">
+                  <div class="seg" id="peScopeSeg" aria-label="选择查看口径"></div>
+                  <div class="sep"></div>
+                  <div class="field" id="peBatchField">
+                    <div class="field__label">批次</div>
+                    <select class="select" id="peBatchSelect" aria-label="选择批次"></select>
+                  </div>
+                  <div class="field" id="peMonthField" style="display:none;">
+                    <div class="field__label">月份</div>
+                    <select class="select" id="peMonthSelect" aria-label="选择月份"></select>
+                  </div>
+                </div>
+              </div>
+
+              <div id="peTableView">
+              <div class="card qc__card">
+                <div class="card__head">
+                  <div class="card__title">① TAT 统计（按项目）</div>
+                  <div class="card__tools">
+                    <div class="pill pill--muted" id="peTatMeta">—</div>
+                  </div>
+                </div>
+                <div class="card__body">
+                  <div class="table table--wide">
+                    <div class="table__row table__row--head pe-row-tat">
+                      <div>项目</div>
+                      <div class="ta-r">实验室（h）</div>
+                      <div class="ta-r">生信（h）</div>
+                      <div class="ta-r">报告（h）</div>
+                      <div class="ta-r">总流转（h）</div>
+                    </div>
+                    <div id="peTatTable"></div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="card qc__card">
+                <div class="card__head">
+                  <div class="card__title">② 人员效能</div>
+                  <div class="card__tools">
+                    <div class="pill pill--muted" id="peEffMeta">—</div>
+                  </div>
+                </div>
+                <div class="card__body">
+                  <div class="grid grid--two">
+                    <div class="card" style="box-shadow:none; border-color: rgba(255,255,255,0.08);">
+                      <div class="card__head">
+                        <div class="card__title">按人员统计（生信/报告）</div>
+                        <div class="card__tools">
+                          <div class="pill pill--muted">吞吐量</div>
+                        </div>
+                      </div>
+                      <div class="card__body">
+                        <div class="table table--wide">
+                          <div class="table__row table__row--head pe-row-person">
+                            <div>人员</div>
+                            <div class="ta-r">生信审核位点数</div>
+                            <div class="ta-r">生信样本数</div>
+                            <div class="ta-r">报告解读位点数</div>
+                            <div class="ta-r">报告样本数</div>
+                          </div>
+                          <div id="pePersonTable"></div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="card" style="box-shadow:none; border-color: rgba(255,255,255,0.08);">
+                      <div class="card__head">
+                        <div class="card__title">按项目×人员：平均处理时长（h）</div>
+                        <div class="card__tools">
+                          <div class="pill pill--muted">项目内对比</div>
+                        </div>
+                      </div>
+                      <div class="card__body">
+                        <div class="table table--wide pe-matrix">
+                          <div class="table__row table__row--head" id="peProjPersonHead"></div>
+                          <div id="peProjPersonBody"></div>
+                        </div>
+                        <div class="qr-note">说明：原型以模拟数据展示“各项目各人员平均处理时长”。</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="qr-split"></div>
+
+                  <div class="grid grid--two">
+                    <div class="card" style="box-shadow:none; border-color: rgba(255,255,255,0.08);">
+                      <div class="card__head">
+                        <div class="card__title">按项目：人工删除位点数</div>
+                        <div class="card__tools">
+                          <div class="pill pill--muted">人工干预</div>
+                        </div>
+                      </div>
+                      <div class="card__body">
+                        <div class="table table--wide">
+                          <div class="table__row table__row--head pe-row-intervene">
+                            <div>项目</div>
+                            <div class="ta-r">人工删除位点数</div>
+                            <div class="ta-r">IGV 点击样本数</div>
+                          </div>
+                          <div id="peInterveneTable"></div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="card" style="box-shadow:none; border-color: rgba(255,255,255,0.08);">
+                      <div class="card__head">
+                        <div class="card__title">效率小结</div>
+                        <div class="card__tools">
+                          <div class="pill pill--muted">关键提示</div>
+                        </div>
+                      </div>
+                      <div class="card__body">
+                        <div class="summary" id="peEffSummary"></div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="card qc__card">
+                <div class="card__head">
+                  <div class="card__title">③ 异常样本数（按项目）</div>
+                  <div class="card__tools">
+                    <div class="pill pill--muted" id="peAbnMeta">—</div>
+                  </div>
+                </div>
+                <div class="card__body">
+                  <div class="table table--wide">
+                    <div class="table__row table__row--head pe-row-abn">
+                      <div>项目</div>
+                      <div class="ta-r">失控样本数</div>
+                      <div class="ta-r">重新上机样本数</div>
+                      <div class="ta-r">重新实验样本数</div>
+                      <div class="ta-r">退单样本数</div>
+                    </div>
+                    <div id="peAbnTable"></div>
+                  </div>
+                </div>
+              </div>
+              </div>
+
+              <div id="peStatsView" style="display:none;">
+                <div class="card qc__card">
+                  <div class="card__head">
+                    <div class="card__title">数据统计 · 按月趋势</div>
+                    <div class="card__tools">
+                      <div class="pill pill--muted">2025年6月至今；选择项目/人员后展示对应图</div>
+                    </div>
+                  </div>
+                  <div class="card__body">
+                    <div class="qc-h">① TAT 统计（按项目，总流转 h）· 箱型图，红点标识离群值</div>
+                    <div class="pe-stats-select-row">
+                      <span class="pe-stats-label">选择项目：</span>
+                      <div class="chips" id="peStatsTatChips" role="group" aria-label="选择项目"></div>
+                    </div>
+                    <div class="pe-stats-chart-wrap">
+                      <canvas id="peStatsTatCanvas" width="920" height="260" aria-label="TAT 月度箱型图"></canvas>
+                    </div>
+                    <div class="qr-split"></div>
+                    <div class="qc-h">② 人员效能（按人员）· 拆分为位点数 / 样本数两张图</div>
+                    <div class="pe-stats-select-row">
+                      <span class="pe-stats-label">选择人员：</span>
+                      <div class="chips" id="peStatsPersonChips" role="group" aria-label="选择人员"></div>
+                    </div>
+                    <div class="grid grid--two">
+                      <div class="pe-stats-chart-wrap">
+                        <div class="pe-stats-chart__title">位点数</div>
+                        <canvas id="peStatsPersonSitesCanvas" width="440" height="240" aria-label="位点数月度箱型图"></canvas>
+                      </div>
+                      <div class="pe-stats-chart-wrap">
+                        <div class="pe-stats-chart__title">样本数</div>
+                        <canvas id="peStatsPersonSamplesCanvas" width="440" height="240" aria-label="样本数月度箱型图"></canvas>
+                      </div>
+                    </div>
+                    <div class="qr-split"></div>
+                    <div class="qc-h">③ 人工删除位点数（按项目）· 箱型图，红点标识离群值</div>
+                    <div class="pe-stats-select-row">
+                      <span class="pe-stats-label">选择项目：</span>
+                      <div class="chips" id="peStatsInterveneChips" role="group" aria-label="选择项目"></div>
+                    </div>
+                    <div class="pe-stats-chart-wrap">
+                      <canvas id="peStatsInterveneCanvas" width="920" height="260" aria-label="人工删除位点月度趋势"></canvas>
+                    </div>
+                    <div class="qr-split"></div>
+                    <div class="qc-h">④ 异常样本数（按项目；四张箱型图，红点标识离群值：失控 / 重上机 / 重实验 / 退单）</div>
+                    <div class="pe-stats-select-row">
+                      <span class="pe-stats-label">选择项目：</span>
+                      <div class="chips" id="peStatsAbnChips" role="group" aria-label="选择项目"></div>
+                    </div>
+                    <div class="pe-stats-abn-grid">
+                      <div class="pe-stats-chart-wrap">
+                        <div class="pe-stats-chart__title">失控样本数</div>
+                        <canvas id="peStatsAbnOocCanvas" width="440" height="200" aria-label="失控样本数月度趋势"></canvas>
+                      </div>
+                      <div class="pe-stats-chart-wrap">
+                        <div class="pe-stats-chart__title">重新上机样本数</div>
+                        <canvas id="peStatsAbnReSeqCanvas" width="440" height="200" aria-label="重新上机月度趋势"></canvas>
+                      </div>
+                      <div class="pe-stats-chart-wrap">
+                        <div class="pe-stats-chart__title">重新实验样本数</div>
+                        <canvas id="peStatsAbnReExpCanvas" width="440" height="200" aria-label="重新实验月度趋势"></canvas>
+                      </div>
+                      <div class="pe-stats-chart-wrap">
+                        <div class="pe-stats-chart__title">退单样本数</div>
+                        <canvas id="peStatsAbnCancelCanvas" width="440" height="200" aria-label="退单样本数月度趋势"></canvas>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="view" id="view-plot-service" data-view="plot-service">
+            <div class="qc">
+              <div class="qc__head">
+                <div>
+                  <div class="qc__title">科研画图服务</div>
+                  <div class="qc__sub">选择图表模板 → 下载数据模板并上传数据 → 生成图片并下载</div>
+                </div>
+              </div>
+
+              <div class="card qc__card">
+                <div class="card__head">
+                  <div class="card__title">① 选择图表模板</div>
+                  <div class="card__tools">
+                    <div class="pill pill--muted" id="plotTemplateHint">—</div>
+                  </div>
+                </div>
+                <div class="card__body">
+                  <div class="plot-templates" id="plotTemplates"></div>
+                </div>
+              </div>
+
+              <div class="grid grid--two qc__grid">
+                <div class="card">
+                  <div class="card__head">
+                    <div class="card__title">② 数据准备</div>
+                    <div class="card__tools">
+                      <a class="btn btn--ghost" href="数据上传模板.csv" download="数据上传模板.csv">下载数据模板</a>
+                    </div>
+                  </div>
+                  <div class="card__body">
+                    <div class="plot-upload">
+                      <label class="plot-upload__zone" id="plotUploadZone">
+                        <input type="file" id="plotFileInput" accept=".csv,.txt,.xlsx" hidden />
+                        <span class="plot-upload__text" id="plotUploadText">点击或拖拽上传数据文件（CSV/TXT）</span>
+                        <span class="plot-upload__name" id="plotFileName"></span>
+                      </label>
+                    </div>
+                    <button class="btn" type="button" id="plotBtnDraw">生成图片</button>
+                  </div>
+                </div>
+
+                <div class="card">
+                  <div class="card__head">
+                    <div class="card__title">③ 预览与下载</div>
+                    <div class="card__tools">
+                      <button class="btn btn--ghost" type="button" id="plotBtnDownload" disabled>下载图片</button>
+                    </div>
+                  </div>
+                  <div class="card__body">
+                    <div class="plot-preview" id="plotPreview">
+                      <div class="plot-preview__placeholder" id="plotPreviewPlaceholder">生成后将在此显示</div>
+                      <canvas id="plotCanvas" width="640" height="400" style="display:none;"></canvas>
+                      <img id="plotImage" alt="生成的图表" style="display:none; max-width:100%; height:auto;" />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <div class="qc-box-modal" id="qcBoxModal" aria-hidden="true">
+            <div class="qc-box-modal__backdrop"></div>
+            <div class="qc-box-modal__content">
+              <div class="qc-box-modal__head">
+                <span class="qc-box-modal__title" id="qcBoxModalTitle"></span>
+                <button type="button" class="btn btn--ghost" id="qcBoxModalClose">关闭</button>
+              </div>
+              <canvas id="qcBoxModalCanvas"></canvas>
+            </div>
+          </div>
+
+          <div class="qc-box-modal qr-special-modal" id="qrSpecialChartModal" aria-hidden="true">
+            <div class="qc-box-modal__backdrop"></div>
+            <div class="qc-box-modal__content">
+              <div class="qc-box-modal__head">
+                <span class="qc-box-modal__title" id="qrSpecialChartModalTitle"></span>
+                <button type="button" class="btn btn--ghost" id="qrSpecialChartModalClose">关闭</button>
+              </div>
+              <canvas id="qrSpecialChartModalCanvas"></canvas>
+            </div>
+          </div>
+
+          <div class="qc-box-modal" id="plotPreviewModal" aria-hidden="true">
+            <div class="qc-box-modal__backdrop"></div>
+            <div class="qc-box-modal__content">
+              <div class="qc-box-modal__head">
+                <span class="qc-box-modal__title">图表预览</span>
+                <button type="button" class="btn btn--ghost" id="plotPreviewModalClose">关闭</button>
+              </div>
+              <img id="plotPreviewModalImage" alt="放大预览" style="max-width:100%; height:auto; display:block;" />
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="./app.js"></script>
+  </body>
+</html>
