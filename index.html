@@ -26,7 +26,7 @@
         <nav class="nav">
           <a class="nav__item is-active" href="#/home" data-route="home">
             <span class="nav__dot" aria-hidden="true"></span>
-            首页全局看板
+            实验室总览
           </a>
           <div class="nav__section">模块</div>
           <a class="nav__item" href="#/module/qc-seq" data-route="qc-seq">
@@ -45,6 +45,10 @@
             <span class="nav__dot" aria-hidden="true"></span>
             科研画图服务
           </a>
+          <a class="nav__item" href="#/module/lab-alpha" data-route="lab-alpha">
+            <span class="nav__dot" aria-hidden="true"></span>
+            实验室管理 alpha 版
+          </a>
         </nav>
 
         <div class="sidebar__footer">
@@ -61,7 +65,7 @@
       <main class="main">
         <header class="topbar">
           <div class="topbar__left">
-            <div class="page-title" id="pageTitle">首页全局看板</div>
+            <div class="page-title" id="pageTitle">实验室总览</div>
             <div class="page-sub" id="pageSub">样本总览与流程滞留实时监控</div>
           </div>
           <div class="topbar__right">
@@ -915,6 +919,123 @@
                       <div class="plot-preview__placeholder" id="plotPreviewPlaceholder">生成后将在此显示</div>
                       <canvas id="plotCanvas" width="640" height="400" style="display:none;"></canvas>
                       <img id="plotImage" alt="生成的图表" style="display:none; max-width:100%; height:auto;" />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="view" id="view-lab-alpha" data-view="lab-alpha">
+            <div class="qc">
+              <div class="qc__head">
+                <div>
+                  <div class="qc__title">实验室管理 alpha 版</div>
+                  <div class="qc__sub">
+                    样本流转追踪、状态查询与异常预警（原型示意，数据为模拟）
+                  </div>
+                </div>
+              </div>
+
+              <div class="card qc__card">
+                <div class="card__head">
+                  <div class="card__title">① 样本流转情况概览</div>
+                  <div class="card__tools">
+                    <div class="pill pill--muted" id="labOverviewMeta">按状态汇总 · 实时刷新</div>
+                  </div>
+                </div>
+                <div class="card__body">
+                  <div class="lab-overview" id="labOverview"></div>
+                </div>
+              </div>
+
+              <div class="card qc__card">
+                <div class="card__head">
+                  <div class="card__title">② 样本状态查询（未发布样本）</div>
+                  <div class="card__tools">
+                    <div class="lab-status-filters">
+                      <div class="field">
+                        <div class="field__label">条码号</div>
+                        <input class="lab-input" id="labFilterBarcode" placeholder="支持模糊查询" />
+                      </div>
+                      <div class="field">
+                        <div class="field__label">检测编号</div>
+                        <input class="lab-input" id="labFilterDetectNo" placeholder="支持模糊查询" />
+                      </div>
+                      <div class="field">
+                        <div class="field__label">批次号</div>
+                        <input class="lab-input" id="labFilterBatchNo" placeholder="支持模糊查询" />
+                      </div>
+                      <div class="field">
+                        <div class="field__label">报告截止日期（≤）</div>
+                        <input class="lab-input" type="date" id="labFilterDueDate" />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div class="card__body">
+                  <div class="lab-table-wrap" id="labStatusTableWrap">
+                    <div class="table table--wide">
+                      <div class="table__row table__row--head lab-row-status">
+                        <div>条码号</div>
+                        <div>检测编号</div>
+                        <div>批次号</div>
+                        <div>报告截止日期</div>
+                        <div>临床诊断</div>
+                        <div>送检单位</div>
+                        <div>检测项目</div>
+                        <div>是否主项目</div>
+                        <div>DNA 总量</div>
+                        <div>RNA 总量</div>
+                        <div>质量等级</div>
+                        <div>杂交前文库浓度</div>
+                        <div>杂交后文库浓度</div>
+                        <div>样本类型</div>
+                        <div>肿瘤细胞占比</div>
+                        <div>是否实验</div>
+                        <div>样本状态</div>
+                        <div>备注</div>
+                      </div>
+                      <div id="labStatusTable"></div>
+                    </div>
+                  </div>
+                  <div class="lab-scrollbar" id="labStatusScrollbar">
+                    <div class="lab-scrollbar__inner"></div>
+                  </div>
+                  <div class="lab-status-pagination">
+                    <div class="lab-status-pagination__meta" id="labStatusMeta">--</div>
+                    <div class="lab-status-pagination__controls">
+                      <button class="btn btn--ghost" type="button" id="labPrevPage">上一页</button>
+                      <button class="btn btn--ghost" type="button" id="labNextPage">下一页</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="card qc__card">
+                <div class="card__head">
+                  <div class="card__title">③ 异常样本明细</div>
+                  <div class="card__tools">
+                    <div class="pill pill--muted">仅展示存在异常/预警的样本</div>
+                  </div>
+                </div>
+                <div class="card__body">
+                  <div class="lab-table-wrap">
+                    <div class="table table--wide">
+                      <div class="table__row table__row--head lab-row-abn">
+                        <div>条码号</div>
+                        <div>检测编号</div>
+                        <div>批次号</div>
+                        <div>样本类型</div>
+                        <div>送检单位</div>
+                        <div>样本状态</div>
+                        <div>当前状态停留时长</div>
+                        <div>节点 SLA</div>
+                        <div>实验室剩余周期</div>
+                        <div>当前环节责任人</div>
+                        <div>预警级别</div>
+                      </div>
+                      <div id="labAbnormalTable"></div>
                     </div>
                   </div>
                 </div>

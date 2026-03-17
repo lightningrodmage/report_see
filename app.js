@@ -107,6 +107,17 @@
       uploadedFile: null,
       imageDataUrl: null,
     },
+    labAlpha: {
+      samples: [],
+      page: 1,
+      pageSize: 10,
+      filters: {
+        barcode: "",
+        detectNo: "",
+        batchNo: "",
+        dueDateLte: "",
+      },
+    },
   };
 
   function clamp(n, min, max) {
@@ -908,6 +919,292 @@
         </div>
       `;
     }).join("");
+  }
+
+  const LAB_STATUSES = [
+    "已接收",
+    "提取中",
+    "建库中",
+    "杂交中",
+    "待上机",
+    "已上机",
+    "实验室流转完成",
+    "已发布",
+  ];
+
+  function genLabAlphaSamples() {
+    const now = new Date();
+    const seed = Number(`${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}`) + 32001;
+    const rnd = seededRand(seed);
+    const list = [];
+    const projects = ["PT122", "PT210", "PT330", "Lung50", "CRC80"];
+    const diag = ["肺腺癌", "肺鳞癌", "结直肠癌", "乳腺癌", "胃癌", "淋巴瘤"];
+    const orgs = ["协和医院", "省肿瘤医院", "市人民医院", "肿瘤医院东区", "胸科医院"];
+    const sampleTypes = ["组织", "血浆", "蜡块", "穿刺组织"];
+    const qaGrades = ["A", "B", "C"];
+    const owners = ["张工", "李工", "王工", "赵工"];
+    const dueBase = now.getTime() + 2 * 24 * 60 * 60 * 1000;
+    const n = 120;
+    for (let i = 0; i < n; i++) {
+      const idx = i + 1;
+      const statusIdx = Math.floor(rnd() * LAB_STATUSES.length);
+      const status = LAB_STATUSES[statusIdx];
+      const barcode = `BC${String(2303000 + idx).padStart(7, "0")}`;
+      const detectNo = `D${String(202503000 + idx).padStart(8, "0")}`;
+      const batchNo = `B${String(250300 + Math.floor(idx / 8)).padStart(6, "0")}`;
+      const dueOffsetDays = Math.round(-2 + rnd() * 10);
+      const dueDate = new Date(dueBase + dueOffsetDays * 24 * 60 * 60 * 1000);
+      const dueStr = dueDate.toISOString().slice(0, 10);
+      const tumorPct = Math.round(20 + rnd() * 70);
+      const isMain = rnd() > 0.25;
+      const isExperiment = rnd() > 0.7;
+      const dna = (40 + rnd() * 140).toFixed(1);
+      const rna = (20 + rnd() * 80).toFixed(1);
+      const libPre = (8 + rnd() * 40).toFixed(2);
+      const libPost = (12 + rnd() * 60).toFixed(2);
+      const stayHours = Math.round(2 + rnd() * 120);
+      const slaHours =
+        status === "已发布" || status === "实验室流转完成" ? 0 : [24, 36, 48, 60][Math.floor(rnd() * 4)];
+      const remainingHours = Math.max(0, slaHours - stayHours);
+      // 控制异常比例：仅对在实验流程中的样本，且“剩余周期很短”或“明显超时”时，按一定概率标记为异常
+      const isFlowStage =
+        status !== "已发布" && status !== "实验室流转完成" && status !== "已上机";
+      const isTightSla = slaHours > 0 && (remainingHours <= 2 || stayHours > slaHours * 1.25);
+      const isAbnormal = isFlowStage && isTightSla && rnd() > 0.45;
+      const alertLevel =
+        !isAbnormal || slaHours === 0
+          ? "无"
+          : remainingHours <= 1 || stayHours > slaHours * 1.4
+          ? "高"
+          : remainingHours <= 4 || stayHours > slaHours * 1.1
+          ? "中"
+          : "低";
+      list.push({
+        id: `${barcode}`,
+        barcode,
+        detectNo,
+        batchNo,
+        dueDate: dueStr,
+        diagnosis: diag[Math.floor(rnd() * diag.length)],
+        org: orgs[Math.floor(rnd() * orgs.length)],
+        project: projects[Math.floor(rnd() * projects.length)],
+        isMain,
+        dnaTotal: dna,
+        rnaTotal: rna,
+        qa: qaGrades[Math.floor(rnd() * qaGrades.length)],
+        libPre,
+        libPost,
+        sampleType: sampleTypes[Math.floor(rnd() * sampleTypes.length)],
+        tumorPct,
+        isExperiment,
+        status,
+        remark: rnd() > 0.7 ? "补体积/重提中" : rnd() > 0.8 ? "等待补充临床信息" : "",
+        stayHours,
+        slaHours,
+        remainingHours,
+        owner: owners[Math.floor(rnd() * owners.length)],
+        alertLevel,
+        isAbnormal,
+      });
+    }
+    return list;
+  }
+
+  function initLabAlphaSim() {
+    state.labAlpha.samples = genLabAlphaSamples();
+    state.labAlpha.page = 1;
+  }
+
+  function getLabFilteredSamples() {
+    const { samples, filters } = state.labAlpha;
+    return samples.filter((s) => {
+      if (s.status === "已发布") return false;
+      if (filters.barcode && !s.barcode.includes(filters.barcode.trim())) return false;
+      if (filters.detectNo && !s.detectNo.includes(filters.detectNo.trim())) return false;
+      if (filters.batchNo && !s.batchNo.includes(filters.batchNo.trim())) return false;
+      if (filters.dueDateLte && s.dueDate > filters.dueDateLte) return false;
+      return true;
+    });
+  }
+
+  function renderLabOverview() {
+    const root = $("#labOverview");
+    if (!root) return;
+    const samples = state.labAlpha.samples || [];
+    const counts = {};
+    LAB_STATUSES.forEach((st) => {
+      counts[st] = 0;
+    });
+    samples.forEach((s) => {
+      counts[s.status] = (counts[s.status] || 0) + 1;
+    });
+    const total = samples.length;
+    const running = samples.filter((s) => s.status !== "已发布" && s.status !== "实验室流转完成").length;
+    const done = samples.filter((s) => s.status === "实验室流转完成" || s.status === "已发布").length;
+    const abn = samples.filter((s) => s.isAbnormal).length;
+    const statusHtml = LAB_STATUSES.map((st, idx) => {
+      const v = counts[st] || 0;
+      return `
+        <div class="lab-overview__item lab-overview__item--status-${idx}">
+          <div class="lab-overview__label">${st}</div>
+          <div class="lab-overview__value">${fmtInt(v)}</div>
+          <div class="lab-overview__hint">占比 ${total ? ((v / total) * 100).toFixed(1) : "--"}%</div>
+        </div>
+      `;
+    }).join("");
+    root.innerHTML = `
+      <div class="lab-overview__item lab-overview__item--total">
+        <div class="lab-overview__label">样本总数</div>
+        <div class="lab-overview__value">${fmtInt(total)}</div>
+        <div class="lab-overview__hint">包含已发布与在制样本</div>
+      </div>
+      <div class="lab-overview__item lab-overview__item--running">
+        <div class="lab-overview__label">在制样本</div>
+        <div class="lab-overview__value">${fmtInt(running)}</div>
+        <div class="lab-overview__hint">状态非“实验室流转完成/已发布”</div>
+      </div>
+      <div class="lab-overview__item lab-overview__item--done">
+        <div class="lab-overview__label">已完成/已发布</div>
+        <div class="lab-overview__value">${fmtInt(done)}</div>
+        <div class="lab-overview__hint">实验室流程已闭环</div>
+      </div>
+      <div class="lab-overview__item lab-overview__item--abn">
+        <div class="lab-overview__label">异常样本</div>
+        <div class="lab-overview__value">${fmtInt(abn)}</div>
+        <div class="lab-overview__hint">超 SLA 或剩余周期不足</div>
+      </div>
+      ${statusHtml}
+    `;
+    const meta = $("#labOverviewMeta");
+    if (meta) {
+      meta.textContent = `状态总数：${fmtInt(total)} · 在制：${fmtInt(running)} · 异常：${fmtInt(abn)}`;
+    }
+  }
+
+  function labStatusBadge(status) {
+    const lower = String(status || "");
+    let cls = "";
+    if (lower.includes("已发布") || lower.includes("完成")) cls = "lab-badge-status--done";
+    else if (lower.includes("待") || lower.includes("已上机") || lower.includes("杂交")) cls = "lab-badge-status--warn";
+    else if (lower.includes("提取") || lower.includes("建库")) cls = "";
+    return `<span class="lab-badge-status ${cls}">${status}</span>`;
+  }
+
+  function labAlertPill(level) {
+    if (!level || level === "无") return `<span class="lab-alert-pill">无</span>`;
+    const cls =
+      level === "高" ? "lab-alert-pill--high" : level === "中" ? "lab-alert-pill--mid" : "lab-alert-pill--low";
+    return `<span class="lab-alert-pill ${cls}">${level}</span>`;
+  }
+
+  function fmtHours(h) {
+    if (!Number.isFinite(h)) return "--";
+    if (h <= 0) return "0 h";
+    if (h < 24) return `${Math.round(h)} h`;
+    const d = Math.floor(h / 24);
+    const rh = Math.round(h % 24);
+    return `${d} d ${rh} h`;
+  }
+
+  function renderLabStatusTable() {
+    const body = $("#labStatusTable");
+    const metaEl = $("#labStatusMeta");
+    if (!body) return;
+    const list = getLabFilteredSamples();
+    const pageSize = state.labAlpha.pageSize || 10;
+    const total = list.length;
+    const maxPage = Math.max(1, Math.ceil(total / pageSize));
+    const page = clamp(state.labAlpha.page, 1, maxPage);
+    state.labAlpha.page = page;
+    const start = (page - 1) * pageSize;
+    const pageItems = list.slice(start, start + pageSize);
+    body.innerHTML = pageItems
+      .map((s) => {
+        return `
+          <div class="table__row lab-row-status">
+            <div>${s.barcode}</div>
+            <div>${s.detectNo}</div>
+            <div>${s.batchNo}</div>
+            <div>${s.dueDate}</div>
+            <div>${s.diagnosis}</div>
+            <div>${s.org}</div>
+            <div>${s.project}</div>
+            <div>${s.isMain ? "是" : "否"}</div>
+            <div>${s.dnaTotal} ng</div>
+            <div>${s.rnaTotal} ng</div>
+            <div>${s.qa}</div>
+            <div>${s.libPre} ng/µL</div>
+            <div>${s.libPost} ng/µL</div>
+            <div>${s.sampleType}</div>
+            <div>${s.tumorPct}%</div>
+            <div>${s.isExperiment ? "是" : "否"}</div>
+            <div>${labStatusBadge(s.status)}</div>
+            <div>${s.remark || "--"}</div>
+          </div>
+        `;
+      })
+      .join("");
+    if (metaEl) {
+      metaEl.textContent = total
+        ? `共 ${fmtInt(total)} 条记录，当前第 ${page} / ${maxPage} 页，每页 ${pageSize} 条（可左右滚动查看全部字段）`
+        : "暂无符合条件的样本（可调整筛选条件或左右滚动查看）";
+    }
+    // 更新自定义水平滚动条宽度，使其与表格内容宽度一致
+    const wrap = $("#labStatusTableWrap");
+    const scrollbar = $("#labStatusScrollbar");
+    if (wrap && scrollbar) {
+      const inner = scrollbar.querySelector(".lab-scrollbar__inner");
+      if (inner) {
+        const targetWidth = Math.max(wrap.scrollWidth, wrap.clientWidth);
+        inner.style.width = `${targetWidth}px`;
+      }
+    }
+    const prevBtn = $("#labPrevPage");
+    const nextBtn = $("#labNextPage");
+    if (prevBtn) prevBtn.disabled = page <= 1;
+    if (nextBtn) nextBtn.disabled = page >= maxPage;
+  }
+
+  function renderLabAbnormalTable() {
+    const body = $("#labAbnormalTable");
+    if (!body) return;
+    const samples = state.labAlpha.samples || [];
+    const list = samples.filter(
+      (s) =>
+        s.isAbnormal &&
+        s.status !== "已上机" &&
+        s.status !== "实验室流转完成"
+    );
+    body.innerHTML = list
+      .map((s) => {
+        return `
+          <div class="table__row lab-row-abn">
+            <div>${s.barcode}</div>
+            <div>${s.detectNo}</div>
+            <div>${s.batchNo}</div>
+            <div>${s.sampleType}</div>
+            <div>${s.org}</div>
+            <div>${labStatusBadge(s.status)}</div>
+            <div>${fmtHours(s.stayHours)}</div>
+            <div>${s.slaHours ? `${fmtHours(s.slaHours)}` : "--"}</div>
+            <div>${s.slaHours ? fmtHours(s.remainingHours) : "--"}</div>
+            <div>${s.owner}</div>
+            <div>${labAlertPill(s.alertLevel)}</div>
+          </div>
+        `;
+      })
+      .join("");
+  }
+
+  function renderLabAlpha() {
+    const root = $("#view-lab-alpha");
+    if (!root) return;
+    if (!state.labAlpha.samples.length) {
+      initLabAlphaSim();
+    }
+    renderLabOverview();
+    renderLabStatusTable();
+    renderLabAbnormalTable();
   }
 
   function renderProductivityStatsView() {
@@ -3407,6 +3704,7 @@
     renderQcResult({ skipMonthly: true });
     renderProductivity();
     renderPlotService();
+    renderLabAlpha();
   }
 
   function setPaused(paused) {
@@ -3444,11 +3742,12 @@
 
     // Titles
     const titleMap = {
-      home: ["首页全局看板", "样本总览与流程滞留实时监控"],
+      home: ["实验室总览", "样本总览与流程滞留实时监控"],
       "qc-seq": ["测序下机数据质控", "下机批次质量与异常定位"],
       "qc-result": ["检测结果质量控制", "规则命中、审核与复测闭环"],
       productivity: ["人效分析", "吞吐、在制、时长与瓶颈洞察"],
       "plot-service": ["科研画图服务", "模板化出图、任务队列与交付管理"],
+      "lab-alpha": ["实验室管理 alpha 版", "样本流转、状态查询与异常预警"],
     };
     const [t, s] = titleMap[view] ?? ["智慧化实验室管理系统", "原型页面"];
     setText("pageTitle", t);
@@ -3550,6 +3849,26 @@
         state.productivity.selectedBatchId = t.value;
         renderProductivity();
       }
+      if (t.matches("#labFilterBarcode")) {
+        state.labAlpha.filters.barcode = t.value || "";
+        state.labAlpha.page = 1;
+        renderLabAlpha();
+      }
+      if (t.matches("#labFilterDetectNo")) {
+        state.labAlpha.filters.detectNo = t.value || "";
+        state.labAlpha.page = 1;
+        renderLabAlpha();
+      }
+      if (t.matches("#labFilterBatchNo")) {
+        state.labAlpha.filters.batchNo = t.value || "";
+        state.labAlpha.page = 1;
+        renderLabAlpha();
+      }
+      if (t.matches("#labFilterDueDate")) {
+        state.labAlpha.filters.dueDateLte = t.value || "";
+        state.labAlpha.page = 1;
+        renderLabAlpha();
+      }
       if (t.matches("#peMonthSelect")) {
         state.productivity.selectedMonth = t.value;
         renderProductivity();
@@ -3571,6 +3890,33 @@
         renderProductivity();
       }
     });
+
+    const labPrevPage = $("#labPrevPage");
+    if (labPrevPage) {
+      labPrevPage.addEventListener("click", () => {
+        state.labAlpha.page = Math.max(1, (state.labAlpha.page || 1) - 1);
+        renderLabAlpha();
+      });
+    }
+    const labNextPage = $("#labNextPage");
+    if (labNextPage) {
+      labNextPage.addEventListener("click", () => {
+        state.labAlpha.page = (state.labAlpha.page || 1) + 1;
+        renderLabAlpha();
+      });
+    }
+
+    // 水平滚动条与表格联动
+    const labStatusWrap = $("#labStatusTableWrap");
+    const labStatusScrollbar = $("#labStatusScrollbar");
+    if (labStatusWrap && labStatusScrollbar) {
+      labStatusScrollbar.addEventListener("scroll", () => {
+        labStatusWrap.scrollLeft = labStatusScrollbar.scrollLeft;
+      });
+      labStatusWrap.addEventListener("scroll", () => {
+        labStatusScrollbar.scrollLeft = labStatusWrap.scrollLeft;
+      });
+    }
 
     document.addEventListener("click", (e) => {
       const target = e.target instanceof Element ? e.target : null;
@@ -3666,6 +4012,7 @@
     initQcSeqSim();
     initQcResultSim();
     initProductivitySim();
+    initLabAlphaSim();
     applyRoute();
     renderAll();
     wireEvents();
