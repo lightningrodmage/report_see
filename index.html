@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./styles.css?v=taskcols-2" />
   </head>
   <body>
     <div class="app">
@@ -29,25 +29,56 @@
             实验室总览
           </a>
           <div class="nav__section">模块</div>
-          <a class="nav__item" href="#/module/qc-seq" data-route="qc-seq">
+          <a class="nav__item" href="#/module/sample-center" data-route="sample-center">
             <span class="nav__dot" aria-hidden="true"></span>
-            测序下机数据质控
+            样本中心
           </a>
-          <a class="nav__item" href="#/module/qc-result" data-route="qc-result">
+          <div class="nav__group" id="navLabGroup" role="group" aria-label="实验室中心">
+            <button
+              type="button"
+              class="nav__item nav__item--parent"
+              id="navLabToggle"
+              aria-expanded="false"
+              aria-controls="navLabSub"
+            >
+              <span class="nav__dot" aria-hidden="true"></span>
+              实验室中心
+              <span class="nav__chev" aria-hidden="true"></span>
+            </button>
+            <div class="nav__sub" id="navLabSub" role="group" aria-label="实验室中心子页面" hidden>
+              <a class="nav__item nav__item--sub" href="#/module/lab-extraction" data-route="lab-extraction">
+                <span class="nav__dot" aria-hidden="true"></span>
+                提取中心
+              </a>
+              <a class="nav__item nav__item--sub" href="#/module/lab-ngs" data-route="lab-ngs">
+                <span class="nav__dot" aria-hidden="true"></span>
+                二代实验室
+              </a>
+              <a class="nav__item nav__item--sub" href="#/module/lab-non-ngs" data-route="lab-non-ngs">
+                <span class="nav__dot" aria-hidden="true"></span>
+                非二代实验室
+              </a>
+            </div>
+          </div>
+          <a class="nav__item" href="#/module/qc-center" data-route="qc-center">
             <span class="nav__dot" aria-hidden="true"></span>
-            检测结果质量控制
+            质控中心
           </a>
-          <a class="nav__item" href="#/module/productivity" data-route="productivity">
+          <a class="nav__item" href="#/module/result-center" data-route="result-center">
             <span class="nav__dot" aria-hidden="true"></span>
-            人效分析
+            结果中心
           </a>
-          <a class="nav__item" href="#/module/plot-service" data-route="plot-service">
+          <a class="nav__item" href="#/module/abnormal-center" data-route="abnormal-center">
             <span class="nav__dot" aria-hidden="true"></span>
-            科研画图服务
+            异常中心
           </a>
-          <a class="nav__item" href="#/module/lab-alpha" data-route="lab-alpha">
+          <a class="nav__item" href="#/module/analysis" data-route="analysis">
             <span class="nav__dot" aria-hidden="true"></span>
-            实验室管理 alpha 版
+            管理分析
+          </a>
+          <a class="nav__item" href="#/module/tool-service" data-route="tool-service">
+            <span class="nav__dot" aria-hidden="true"></span>
+            工具服务
           </a>
         </nav>
 
@@ -254,7 +285,7 @@
             </div>
           </section>
 
-          <section class="view" id="view-qc-seq" data-view="qc-seq">
+          <section class="view" id="view-qc-center" data-view="qc-center">
             <div class="qc">
               <div class="qc__head">
                 <div>
@@ -301,10 +332,11 @@
                     <div class="qc-split">
                       <div class="qc-split__left">
                         <div class="qc-h">拆分后各样本数据产出情况</div>
-                        <div class="qc-note">以 Index 组合热图展示：横轴 I5、纵轴 I7；颜色表示产出（Gb），异常以红色强调。</div>
+                        <div class="qc-note">以 Index 组合热图展示：横轴 I5、纵轴 I7；颜色表示产出（Gb），异常以红色强调。点击红色单元格可选中，并在右侧推送异常工单。</div>
                       </div>
-                      <div class="qc-split__right">
-                        <div class="pill pill--muted" id="qcSplitHint">全量</div>
+                      <div class="qc-split__right qc-split__right--heat">
+                        <div class="pill pill--muted" id="qcHeatSelection">点击红色单元格选择</div>
+                        <button type="button" class="btn btn--ghost" id="qcBtnPushHeat" disabled>推送异常</button>
                       </div>
                     </div>
                     <div class="heatmap-wrap">
@@ -371,6 +403,7 @@
                 <div class="card__head">
                   <div class="card__title">④ 单个样本质控监控（明细表）</div>
                   <div class="card__tools">
+                    <button type="button" class="btn btn--ghost" id="qcBtnPushSampleDetail">推送异常</button>
                     <div class="field field--inline">
                       <div class="field__label">样本</div>
                       <select class="select" id="qcSampleSelect" aria-label="选择样本"></select>
@@ -392,7 +425,7 @@
             </div>
           </section>
 
-          <section class="view" id="view-qc-result" data-view="qc-result">
+          <section class="view" id="view-result-center" data-view="result-center">
             <div class="qc">
               <div class="qc__head">
                 <div>
@@ -645,7 +678,7 @@
             </div>
           </section>
 
-          <section class="view" id="view-productivity" data-view="productivity">
+          <section class="view" id="view-analysis" data-view="analysis">
             <div class="qc">
               <div class="qc__head">
                 <div>
@@ -860,13 +893,84 @@
                         <canvas id="peStatsAbnCancelCanvas" width="440" height="200" aria-label="退单样本数月度趋势"></canvas>
                       </div>
                     </div>
+                    <div class="qr-split"></div>
+                    <div class="qc-h">⑤ 异常工单处理时长（按人员）· 箱型图，红点标识离群值（单位：小时）</div>
+                    <div class="pe-stats-select-row">
+                      <span class="pe-stats-label">选择月份：</span>
+                      <div class="chips chips--scroll" id="peStatsAbnTaskMonthChips" role="group" aria-label="选择月份"></div>
+                    </div>
+                    <div class="pe-stats-chart-wrap">
+                      <canvas id="peStatsAbnTaskCanvas" width="920" height="280" aria-label="异常工单处理时长按人员箱型图"></canvas>
+                    </div>
                   </div>
                 </div>
               </div>
             </div>
           </section>
 
-          <section class="view" id="view-plot-service" data-view="plot-service">
+          <section class="view" id="view-abnormal-center" data-view="abnormal-center">
+            <div class="qc">
+              <div class="qc__head">
+                <div>
+                  <div class="qc__title">异常中心</div>
+                  <div class="qc__sub">告警落到任务、任务闭环处理（原型示意，数据为模拟）</div>
+                </div>
+              </div>
+
+              <div class="card qc__card">
+                <div class="card__head">
+                  <div class="card__title">① 任务列表</div>
+                  <div class="card__tools">
+                    <div class="pill pill--muted" id="tasksMeta">—</div>
+                  </div>
+                </div>
+                <div class="card__body">
+                  <div class="lab-status-filters" style="margin-bottom: 12px;">
+                    <div class="field field--inline">
+                      <div class="field__label">任务状态</div>
+                      <select class="select" id="taskFilterStatus" aria-label="筛选任务状态">
+                        <option value="">全部</option>
+                        <option value="todo">待分配</option>
+                        <option value="doing">处理中</option>
+                        <option value="done">已完成</option>
+                      </select>
+                    </div>
+                    <div class="field field--inline">
+                      <div class="field__label">当前处理人</div>
+                      <input class="lab-input" id="taskFilterAssignee" placeholder="支持模糊查询" />
+                    </div>
+                    <div class="field field--inline">
+                      <div class="field__label">环节</div>
+                      <select class="select" id="taskFilterStageKey" aria-label="筛选任务环节">
+                        <option value="">全部</option>
+                        <option value="exp">实验中</option>
+                        <option value="ana">分析中</option>
+                        <option value="bio">生信审核中</option>
+                        <option value="rep">报告审核中</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div class="table table--wide">
+                    <div class="table__row table__row--head task-row">
+                      <div>任务ID</div>
+                      <div>关联样本</div>
+                      <div>优先级</div>
+                        <div>任务说明</div>
+                      <div>任务状态</div>
+                        <div>当前处理人</div>
+                      <div>创建时间</div>
+                      <div>到期/剩余</div>
+                      <div>操作</div>
+                    </div>
+                    <div id="taskList"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="view" id="view-tool-service" data-view="tool-service">
             <div class="qc">
               <div class="qc__head">
                 <div>
@@ -926,26 +1030,24 @@
             </div>
           </section>
 
-          <section class="view" id="view-lab-alpha" data-view="lab-alpha">
+          <section class="view" id="view-sample-center" data-view="sample-center">
             <div class="qc">
               <div class="qc__head">
                 <div>
-                  <div class="qc__title">实验室管理 alpha 版</div>
-                  <div class="qc__sub">
-                    样本流转追踪、状态查询与异常预警（原型示意，数据为模拟）
-                  </div>
+                  <div class="qc__title">样本中心</div>
+                  <div class="qc__sub">统一主状态口径：概览、查询与异常明细（与实验室中心、异常中心数据同源）</div>
                 </div>
               </div>
 
               <div class="card qc__card">
                 <div class="card__head">
-                  <div class="card__title">① 样本流转情况概览</div>
+                  <div class="card__title">① 样本状态概览</div>
                   <div class="card__tools">
-                    <div class="pill pill--muted" id="labOverviewMeta">按状态汇总 · 实时刷新</div>
+                    <div class="pill pill--muted" id="scOverviewMeta">主状态口径 · 含直连「实验中」路径</div>
                   </div>
                 </div>
                 <div class="card__body">
-                  <div class="lab-overview" id="labOverview"></div>
+                  <div class="lab-overview lab-overview--full" id="scOverview"></div>
                 </div>
               </div>
 
@@ -956,25 +1058,25 @@
                     <div class="lab-status-filters">
                       <div class="field">
                         <div class="field__label">条码号</div>
-                        <input class="lab-input" id="labFilterBarcode" placeholder="支持模糊查询" />
+                        <input class="lab-input" id="scFilterBarcode" placeholder="支持模糊查询" />
                       </div>
                       <div class="field">
                         <div class="field__label">检测编号</div>
-                        <input class="lab-input" id="labFilterDetectNo" placeholder="支持模糊查询" />
+                        <input class="lab-input" id="scFilterDetectNo" placeholder="支持模糊查询" />
                       </div>
                       <div class="field">
                         <div class="field__label">批次号</div>
-                        <input class="lab-input" id="labFilterBatchNo" placeholder="支持模糊查询" />
+                        <input class="lab-input" id="scFilterBatchNo" placeholder="支持模糊查询" />
                       </div>
                       <div class="field">
                         <div class="field__label">报告截止日期（≤）</div>
-                        <input class="lab-input" type="date" id="labFilterDueDate" />
+                        <input class="lab-input" type="date" id="scFilterDueDate" />
                       </div>
                     </div>
                   </div>
                 </div>
                 <div class="card__body">
-                  <div class="lab-table-wrap" id="labStatusTableWrap">
+                  <div class="lab-table-wrap" id="scStatusTableWrap">
                     <div class="table table--wide">
                       <div class="table__row table__row--head lab-row-status">
                         <div>条码号</div>
@@ -996,17 +1098,17 @@
                         <div>样本状态</div>
                         <div>备注</div>
                       </div>
-                      <div id="labStatusTable"></div>
+                      <div id="scStatusTable"></div>
                     </div>
                   </div>
-                  <div class="lab-scrollbar" id="labStatusScrollbar">
+                  <div class="lab-scrollbar" id="scStatusScrollbar">
                     <div class="lab-scrollbar__inner"></div>
                   </div>
                   <div class="lab-status-pagination">
-                    <div class="lab-status-pagination__meta" id="labStatusMeta">--</div>
+                    <div class="lab-status-pagination__meta" id="scStatusMeta">--</div>
                     <div class="lab-status-pagination__controls">
-                      <button class="btn btn--ghost" type="button" id="labPrevPage">上一页</button>
-                      <button class="btn btn--ghost" type="button" id="labNextPage">下一页</button>
+                      <button class="btn btn--ghost" type="button" id="scPrevPage">上一页</button>
+                      <button class="btn btn--ghost" type="button" id="scNextPage">下一页</button>
                     </div>
                   </div>
                 </div>
@@ -1016,13 +1118,13 @@
                 <div class="card__head">
                   <div class="card__title">③ 异常样本明细</div>
                   <div class="card__tools">
-                    <div class="pill pill--muted">仅展示存在异常/预警的样本</div>
+                    <div class="pill pill--muted">与异常中心任务同源 · 存在异常/预警的样本</div>
                   </div>
                 </div>
                 <div class="card__body">
                   <div class="lab-table-wrap">
                     <div class="table table--wide">
-                      <div class="table__row table__row--head lab-row-abn">
+                      <div class="table__row table__row--head lab-row-abn lab-row-abn--sc">
                         <div>条码号</div>
                         <div>检测编号</div>
                         <div>批次号</div>
@@ -1031,17 +1133,608 @@
                         <div>样本状态</div>
                         <div>当前状态停留时长</div>
                         <div>节点 SLA</div>
-                        <div>实验室剩余周期</div>
                         <div>当前环节责任人</div>
                         <div>预警级别</div>
                       </div>
-                      <div id="labAbnormalTable"></div>
+                      <div id="scAbnormalTable"></div>
                     </div>
                   </div>
                 </div>
               </div>
             </div>
           </section>
+
+          <section class="view" id="view-lab-extraction" data-view="lab-extraction">
+            <div class="qc">
+              <div class="qc__head ext-head">
+                <div>
+                  <div class="qc__title">提取中心</div>
+                  <div class="qc__sub">实验室中心 · 提取监控、材料统计与交接追踪（数据为模拟，风险样本与异常中心任务同源）</div>
+                </div>
+                <div class="ext-tabs" role="tablist" aria-label="提取中心子页面">
+                  <button type="button" class="ext-tab is-active" data-ext-tab="monitor" role="tab" aria-selected="true">监控台</button>
+                  <button type="button" class="ext-tab" data-ext-tab="stats" role="tab" aria-selected="false">数据统计</button>
+                  <button type="button" class="ext-tab" data-ext-tab="transfer" role="tab" aria-selected="false">交接追踪</button>
+                </div>
+              </div>
+
+              <div class="ext-panel is-active" id="extPanelMonitor" data-ext-panel="monitor">
+                <div class="ext-toolbar">
+                  <div class="field field--inline">
+                    <div class="field__label">展示日期</div>
+                    <input type="date" class="lab-input" id="extMonitorDate" />
+                  </div>
+                  <div class="pill pill--muted" id="extMonitorDateHint">按日统计当日在途样本口径</div>
+                </div>
+
+                <div class="grid grid--cards ext-kpi-grid">
+                  <div class="card kpi">
+                    <div class="kpi__head"><div class="kpi__label">当日待提取</div></div>
+                    <div class="kpi__value" id="extKpiPending">--</div>
+                  </div>
+                  <div class="card kpi">
+                    <div class="kpi__head"><div class="kpi__label">提取中</div></div>
+                    <div class="kpi__value" id="extKpiExtracting">--</div>
+                  </div>
+                  <div class="card kpi">
+                    <div class="kpi__head"><div class="kpi__label">质检中</div></div>
+                    <div class="kpi__value" id="extKpiQc">--</div>
+                  </div>
+                  <div class="card kpi">
+                    <div class="kpi__head"><div class="kpi__label">待交接</div></div>
+                    <div class="kpi__value" id="extKpiHandover">--</div>
+                  </div>
+                  <div class="card kpi">
+                    <div class="kpi__head"><div class="kpi__label">质检不通过</div></div>
+                    <div class="kpi__value" id="extKpiFail">--</div>
+                  </div>
+                  <div class="card kpi">
+                    <div class="kpi__head"><div class="kpi__label">核酸暂存中</div></div>
+                    <div class="kpi__value" id="extKpiStaging">--</div>
+                  </div>
+                </div>
+
+                <div class="card qc__card">
+                  <div class="card__head">
+                    <div class="card__title">样本类型分布（当批次）</div>
+                    <div class="card__tools"><div class="pill pill--muted" id="extTypeDistMeta">—</div></div>
+                  </div>
+                  <div class="card__body">
+                    <div class="chart qc-chart"><canvas id="extCanvasTypeDist" width="920" height="220" aria-label="样本类型分布"></canvas></div>
+                  </div>
+                </div>
+
+                <div class="card qc__card">
+                  <div class="card__head">
+                    <div class="card__title">风险样本清单</div>
+                    <div class="card__tools"><div class="pill pill--muted">与异常中心任务同源 · 提取环节风险规则</div></div>
+                  </div>
+                  <div class="card__body">
+                    <div class="table table--wide">
+                      <div class="table__row table__row--head ext-row-risk">
+                        <div>条码号</div>
+                        <div>风险类型</div>
+                        <div>样本类型</div>
+                        <div>当前状态</div>
+                        <div>停留时长</div>
+                        <div>责任人</div>
+                        <div>关联任务</div>
+                      </div>
+                      <div id="extRiskTable"></div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="card qc__card">
+                  <div class="card__head">
+                    <div class="card__title">提取交接情况（质控通过后）</div>
+                    <div class="card__tools"><div class="pill pill--muted">点击卡片查看样本明细</div></div>
+                  </div>
+                  <div class="card__body">
+                    <div class="ext-handover-grid">
+                      <button type="button" class="ext-handover-tile" data-ext-handover="ngs">
+                        <div class="ext-handover-tile__label">待交接二代组</div>
+                        <div class="ext-handover-tile__value" id="extHandoverNgs">--</div>
+                      </button>
+                      <button type="button" class="ext-handover-tile" data-ext-handover="non-ngs">
+                        <div class="ext-handover-tile__label">待交接非二代组</div>
+                        <div class="ext-handover-tile__value" id="extHandoverNonNgs">--</div>
+                      </button>
+                      <button type="button" class="ext-handover-tile" data-ext-handover="handed-no-exp">
+                        <div class="ext-handover-tile__label">已交接但未实验</div>
+                        <div class="ext-handover-tile__value" id="extHandoverHanded">--</div>
+                      </button>
+                      <button type="button" class="ext-handover-tile" data-ext-handover="timeout">
+                        <div class="ext-handover-tile__label">超时未交接</div>
+                        <div class="ext-handover-tile__value" id="extHandoverTimeout">--</div>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="ext-panel" id="extPanelStats" data-ext-panel="stats" hidden>
+                <div class="ext-toolbar ext-toolbar--wrap">
+                  <div class="seg" id="extStatsScopeSeg" aria-label="统计口径"></div>
+                  <div class="field field--inline" id="extStatsDayField">
+                    <div class="field__label">选择日期</div>
+                    <input type="date" class="lab-input" id="extStatsDay" />
+                  </div>
+                  <div class="field field--inline" id="extStatsMonthField" style="display:none;">
+                    <div class="field__label">选择月份</div>
+                    <input type="month" class="lab-input" id="extStatsMonth" />
+                  </div>
+                  <div class="pill pill--muted" id="extStatsHint">—</div>
+                </div>
+
+                <div class="grid grid--two qc__grid">
+                  <div class="card">
+                    <div class="card__head">
+                      <div class="card__title">DNA 产量分布（按样本类型）</div>
+                      <div class="card__tools"><div class="pill pill--muted">箱型图 · 红点为离群值</div></div>
+                    </div>
+                    <div class="card__body">
+                      <div class="chart qc-chart"><canvas id="extCanvasDnaYield" width="440" height="240"></canvas></div>
+                    </div>
+                  </div>
+                  <div class="card">
+                    <div class="card__head">
+                      <div class="card__title">RNA 产量分布（按样本类型）</div>
+                      <div class="card__tools"><div class="pill pill--muted">箱型图 · 红点为离群值</div></div>
+                    </div>
+                    <div class="card__body">
+                      <div class="chart qc-chart"><canvas id="extCanvasRnaYield" width="440" height="240"></canvas></div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="grid grid--two qc__grid">
+                  <div class="card">
+                    <div class="card__head">
+                      <div class="card__title">DNA / RNA 浓度（按样本类型）</div>
+                      <div class="card__tools"><div class="pill pill--muted">ng/µL</div></div>
+                    </div>
+                    <div class="card__body">
+                      <div class="chart qc-chart"><canvas id="extCanvasDnaConc" width="440" height="220"></canvas></div>
+                      <div class="chart qc-chart" style="margin-top:10px;"><canvas id="extCanvasRnaConc" width="440" height="220"></canvas></div>
+                    </div>
+                  </div>
+                  <div class="card">
+                    <div class="card__head">
+                      <div class="card__title">DNA / RNA 纯度（按样本类型）</div>
+                      <div class="card__tools"><div class="pill pill--muted">A260/A280</div></div>
+                    </div>
+                    <div class="card__body">
+                      <div class="chart qc-chart"><canvas id="extCanvasDnaPur" width="440" height="220"></canvas></div>
+                      <div class="chart qc-chart" style="margin-top:10px;"><canvas id="extCanvasRnaPur" width="440" height="220"></canvas></div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="card qc__card">
+                  <div class="card__head">
+                    <div class="card__title">低质量核酸样本明细</div>
+                    <div class="card__tools"><div class="pill pill--muted">浓度/纯度未达阈值</div></div>
+                  </div>
+                  <div class="card__body">
+                    <div class="table table--wide">
+                      <div class="table__row table__row--head ext-row-low">
+                        <div>条码号</div>
+                        <div>样本类型</div>
+                        <div>项目</div>
+                        <div>DNA 浓度</div>
+                        <div>RNA 浓度</div>
+                        <div>纯度问题说明</div>
+                      </div>
+                      <div id="extLowQualityTable"></div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="card qc__card">
+                  <div class="card__head">
+                    <div class="card__title">核酸质控通过率</div>
+                    <div class="card__tools"><div class="pill pill--muted">按项目 × 样本类型</div></div>
+                  </div>
+                  <div class="card__body">
+                    <div class="table table--wide">
+                      <div class="table__row table__row--head ext-row-pass" id="extPassRateHead"></div>
+                      <div id="extPassRateBody"></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="ext-panel" id="extPanelTransfer" data-ext-panel="transfer" hidden>
+                <div class="ext-toolbar">
+                  <div class="pill pill--muted">与监控台「提取交接」数据同源 · 批次/样本交接流水</div>
+                </div>
+                <div class="card qc__card">
+                  <div class="card__head">
+                    <div class="card__title">当日交接流水</div>
+                    <div class="card__tools"><div class="pill pill--muted" id="extTransferMeta">—</div></div>
+                  </div>
+                  <div class="card__body">
+                    <div class="table table--wide">
+                      <div class="table__row table__row--head ext-row-transfer">
+                        <div>时间</div>
+                        <div>条码号</div>
+                        <div>交接方向</div>
+                        <div>目标中心</div>
+                        <div>状态</div>
+                        <div>操作人</div>
+                      </div>
+                      <div id="extTransferTable"></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <div class="qc-box-modal" id="extHandoverModal" aria-hidden="true">
+            <div class="qc-box-modal__backdrop"></div>
+            <div class="qc-box-modal__content" style="max-width:min(960px,96vw);">
+              <div class="qc-box-modal__head">
+                <span class="qc-box-modal__title" id="extHandoverModalTitle">样本明细</span>
+                <button type="button" class="btn btn--ghost" id="extHandoverModalClose">关闭</button>
+              </div>
+              <div class="card__body" style="padding:0 0 12px;">
+                <div class="table table--wide">
+                  <div class="table__row table__row--head ext-row-handover-modal">
+                    <div>条码号</div>
+                    <div>检测编号</div>
+                    <div>样本类型</div>
+                    <div>项目</div>
+                    <div>停留时长</div>
+                    <div>责任人</div>
+                  </div>
+                  <div id="extHandoverModalBody"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <section class="view" id="view-lab-ngs" data-view="lab-ngs">
+            <div class="qc">
+              <div class="qc__head ngs-head">
+                <div>
+                  <div class="qc__title">二代实验室</div>
+                  <div class="qc__sub">监控台与数据统计（样本状态口径与样本中心一致）</div>
+                </div>
+                <div class="ngs-tabs" role="tablist" aria-label="二代实验室子页面">
+                  <button type="button" class="ngs-tab is-active" data-ngs-tab="monitor" role="tab" aria-selected="true">监控台</button>
+                  <button type="button" class="ngs-tab" data-ngs-tab="stats" role="tab" aria-selected="false">数据统计</button>
+                </div>
+              </div>
+
+              <div class="ngs-panel is-active" data-ngs-panel="monitor" id="ngsPanelMonitor">
+                <div class="grid grid--cards ngs-kpi-grid">
+                  <div class="card kpi"><div class="kpi__head"><div class="kpi__label">待建库</div></div><div class="kpi__value" id="ngsKpiPendingLib">--</div></div>
+                  <div class="card kpi"><div class="kpi__head"><div class="kpi__label">建库中</div></div><div class="kpi__value" id="ngsKpiLibDoing">--</div></div>
+                  <div class="card kpi"><div class="kpi__head"><div class="kpi__label">待杂交</div></div><div class="kpi__value" id="ngsKpiPendingHyb">--</div></div>
+                  <div class="card kpi"><div class="kpi__head"><div class="kpi__label">杂交中</div></div><div class="kpi__value" id="ngsKpiHybDoing">--</div></div>
+                  <div class="card kpi"><div class="kpi__head"><div class="kpi__label">待上机</div></div><div class="kpi__value" id="ngsKpiPendingRun">--</div></div>
+                  <div class="card kpi"><div class="kpi__head"><div class="kpi__label">测序中</div></div><div class="kpi__value" id="ngsKpiSeqDoing">--</div></div>
+                  <div class="card kpi"><div class="kpi__head"><div class="kpi__label">实验室流转完成</div></div><div class="kpi__value" id="ngsKpiDone">--</div></div>
+                </div>
+
+                <div class="card qc__card">
+                  <div class="card__head">
+                    <div class="card__title">风险样本清单</div>
+                    <div class="card__tools"><div class="pill pill--muted">二代实验关键节点异常</div></div>
+                  </div>
+                  <div class="card__body">
+                    <div class="table table--wide">
+                      <div class="table__row table__row--head ngs-row-risk">
+                        <div>条码号</div>
+                        <div>风险类型</div>
+                        <div>项目</div>
+                        <div>当前状态</div>
+                        <div>停留时长</div>
+                        <div>责任人</div>
+                        <div>风险等级</div>
+                      </div>
+                      <div id="ngsRiskTable"></div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="card qc__card">
+                  <div class="card__head">
+                    <div class="card__title">批次选择</div>
+                    <div class="card__tools"><div class="seg" id="ngsBatchSeg" aria-label="勾选批次"></div></div>
+                  </div>
+                  <div class="card__body">
+                    <div class="summary" id="ngsBatchSummary"></div>
+                  </div>
+                </div>
+
+                <div class="card qc__card">
+                  <div class="card__head">
+                    <div class="card__title">建库模块（按项目）</div>
+                    <div class="card__tools"><div class="chips" id="ngsProjectChips" role="group" aria-label="勾选项目"></div></div>
+                  </div>
+                  <div class="card__body">
+                    <div class="table table--wide">
+                      <div class="table__row table__row--head ngs-row-lib">
+                        <div>条码号</div>
+                        <div>批次号</div>
+                        <div>项目</div>
+                        <div>状态</div>
+                        <div>文库浓度(预/终)</div>
+                        <div>责任人</div>
+                      </div>
+                      <div id="ngsLibTable"></div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="card qc__card">
+                  <div class="card__head">
+                    <div class="card__title">杂交模块（按项目查看 Pool）</div>
+                    <div class="card__tools"><div class="pill pill--muted">点击 Pool 查看文库明细</div></div>
+                  </div>
+                  <div class="card__body">
+                    <div class="table table--wide">
+                      <div class="table__row table__row--head ngs-row-pool">
+                        <div>项目</div>
+                        <div>Pool 数</div>
+                        <div>Pool 列表</div>
+                      </div>
+                      <div id="ngsPoolTable"></div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="card qc__card">
+                  <div class="card__head">
+                    <div class="card__title">上机模块（按 Run）</div>
+                    <div class="card__tools"><div class="pill pill--muted">每个 Run 含有 Pool 数</div></div>
+                  </div>
+                  <div class="card__body">
+                    <div class="table table--wide">
+                      <div class="table__row table__row--head ngs-row-run">
+                        <div>Run</div>
+                        <div>批次号</div>
+                        <div>状态</div>
+                        <div class="ta-r">Pool 数</div>
+                        <div class="ta-r">样本数</div>
+                      </div>
+                      <div id="ngsRunTable"></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="ngs-panel" data-ngs-panel="stats" id="ngsPanelStats" hidden>
+                <div class="ngs-toolbar">
+                  <div class="seg" id="ngsStatsScopeSeg" aria-label="统计口径"></div>
+                  <div class="field field--inline" id="ngsStatsBatchField">
+                    <div class="field__label">批次</div>
+                    <select class="select" id="ngsStatsBatchSelect" aria-label="选择批次"></select>
+                  </div>
+                  <div class="field field--inline" id="ngsStatsMonthField" style="display:none;">
+                    <div class="field__label">月份</div>
+                    <input class="lab-input" type="month" id="ngsStatsMonthInput" />
+                  </div>
+                  <div class="pill pill--muted" id="ngsStatsMeta">—</div>
+                </div>
+
+                <div class="grid grid--two qc__grid">
+                  <div class="card">
+                    <div class="card__head"><div class="card__title">预文库浓度分布（按项目）</div></div>
+                    <div class="card__body"><div class="chart qc-chart"><canvas id="ngsCanvasPreConc" width="440" height="230"></canvas></div></div>
+                  </div>
+                  <div class="card">
+                    <div class="card__head"><div class="card__title">预文库得率分布（按项目）</div></div>
+                    <div class="card__body"><div class="chart qc-chart"><canvas id="ngsCanvasPreYield" width="440" height="230"></canvas></div></div>
+                  </div>
+                </div>
+
+                <div class="grid grid--two qc__grid">
+                  <div class="card">
+                    <div class="card__head"><div class="card__title">终文库浓度分布（按项目）</div></div>
+                    <div class="card__body"><div class="chart qc-chart"><canvas id="ngsCanvasFinalConc" width="440" height="230"></canvas></div></div>
+                  </div>
+                  <div class="card">
+                    <div class="card__head"><div class="card__title">终文库得率分布（按项目）</div></div>
+                    <div class="card__body"><div class="chart qc-chart"><canvas id="ngsCanvasFinalYield" width="440" height="230"></canvas></div></div>
+                  </div>
+                </div>
+
+                <div class="card qc__card">
+                  <div class="card__head"><div class="card__title">建库失败率（按项目）</div></div>
+                  <div class="card__body"><div class="chart qc-chart"><canvas id="ngsCanvasFailRate" width="920" height="260"></canvas></div></div>
+                </div>
+
+                <div class="card qc__card">
+                  <div class="card__head"><div class="card__title">退单样本明细</div></div>
+                  <div class="card__body">
+                    <div class="table table--wide">
+                      <div class="table__row table__row--head ngs-row-cancel">
+                        <div>条码号</div><div>批次号</div><div>项目</div><div>样本类型</div><div>退单原因</div>
+                      </div>
+                      <div id="ngsCancelTable"></div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="card qc__card">
+                  <div class="card__head"><div class="card__title">按项目 × 样本类型成功率</div></div>
+                  <div class="card__body">
+                    <div class="table table--wide">
+                      <div class="table__row table__row--head ngs-row-success" id="ngsSuccessHead"></div>
+                      <div id="ngsSuccessBody"></div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="card qc__card">
+                  <div class="card__head"><div class="card__title">探针消耗量统计</div><div class="card__tools"><div class="pill pill--muted">1 个杂交 Pooling = 1 个反应探针</div></div></div>
+                  <div class="card__body">
+                    <div class="table table--wide">
+                      <div class="table__row table__row--head ngs-row-probe">
+                        <div>项目</div><div class="ta-r">Pool 数</div><div class="ta-r">探针反应消耗量</div>
+                      </div>
+                      <div id="ngsProbeTable"></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <div class="qc-box-modal" id="ngsPoolModal" aria-hidden="true">
+            <div class="qc-box-modal__backdrop"></div>
+            <div class="qc-box-modal__content" style="max-width:min(960px,96vw);">
+              <div class="qc-box-modal__head">
+                <span class="qc-box-modal__title" id="ngsPoolModalTitle">Pool 文库明细</span>
+                <div style="display:flex; gap:8px; align-items:center;">
+                  <button type="button" class="btn btn--ghost" id="ngsBtnAddPosCtrl">增加阳控</button>
+                  <button type="button" class="btn btn--ghost" id="ngsBtnAddNegCtrl">增加阴控</button>
+                  <button type="button" class="btn btn--ghost" id="ngsPoolModalClose">关闭</button>
+                </div>
+              </div>
+              <div class="qc-note" id="ngsPoolQcHint" style="margin: 0 0 10px 0;">—</div>
+              <div class="table table--wide">
+                <div class="table__row table__row--head ngs-row-pool-lib">
+                  <div>文库ID</div><div>条码号</div><div>项目</div><div>终文库浓度</div><div>状态</div>
+                </div>
+                <div id="ngsPoolModalBody"></div>
+              </div>
+            </div>
+          </div>
+
+          <section class="view" id="view-lab-non-ngs" data-view="lab-non-ngs">
+            <div class="qc">
+              <div class="qc__head nonngs-head">
+                <div>
+                  <div class="qc__title">非二代实验室</div>
+                  <div class="qc__sub">实验室中心 · 按方法学展示监控台与数据统计（异常样本与异常中心同步）</div>
+                </div>
+                <div class="nonngs-tabs" role="tablist" aria-label="非二代实验室子页面">
+                  <button type="button" class="nonngs-tab is-active" data-nonngs-tab="monitor" role="tab" aria-selected="true">监控台</button>
+                  <button type="button" class="nonngs-tab" data-nonngs-tab="stats" role="tab" aria-selected="false">数据统计</button>
+                </div>
+              </div>
+
+              <div class="nonngs-panel is-active" id="nonngsPanelMonitor" data-nonngs-panel="monitor">
+                <div class="card qc__card">
+                  <div class="card__head">
+                    <div class="card__title">按方法学监控</div>
+                    <div class="card__tools">
+                      <div class="pill pill--muted">qPCR / 一代 / IHC / 病理 / 毛细管电泳 / 其他</div>
+                    </div>
+                  </div>
+                  <div class="card__body">
+                    <div class="grid nonngs-monitor-grid" id="nonngsMonitorGrid"></div>
+                  </div>
+                </div>
+
+                <div class="card qc__card">
+                  <div class="card__head">
+                    <div class="card__title">异常样本（与异常中心同步）</div>
+                    <div class="card__tools">
+                      <div class="pill pill--muted">仅展示非二代方法学相关样本</div>
+                    </div>
+                  </div>
+                  <div class="card__body">
+                    <div class="table table--wide">
+                      <div class="table__row table__row--head nonngs-row-abn">
+                        <div>工单号</div>
+                        <div>样本号</div>
+                        <div>方法学</div>
+                        <div>项目</div>
+                        <div>当前 LIMS 状态</div>
+                        <div>业务映射状态</div>
+                        <div>当前步骤</div>
+                        <div>责任组/责任人</div>
+                        <div>停留时长</div>
+                        <div>是否复检</div>
+                        <div>是否异常</div>
+                        <div>风险等级</div>
+                      </div>
+                      <div id="nonngsAbnormalTable"></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="nonngs-panel" id="nonngsPanelStats" data-nonngs-panel="stats" hidden>
+                <div class="nonngs-toolbar">
+                  <div class="field field--inline">
+                    <div class="field__label">统计口径</div>
+                    <input class="lab-input" type="month" id="nonngsStatsMonthInput" />
+                  </div>
+                  <div class="pill pill--muted" id="nonngsStatsMeta">—</div>
+                </div>
+
+                <div class="grid grid--three nonngs-stats-grid">
+                  <div class="card">
+                    <div class="card__head">
+                      <div class="card__title">平均流转时间（小时）</div>
+                      <div class="card__tools"><div class="pill pill--muted">箱型图 + 异常值红点</div></div>
+                    </div>
+                    <div class="card__body">
+                      <div class="chart qc-chart"><canvas id="nonngsCanvasTat" width="300" height="220"></canvas></div>
+                    </div>
+                  </div>
+                  <div class="card">
+                    <div class="card__head">
+                      <div class="card__title">样本量（按项目）</div>
+                      <div class="card__tools"><div class="pill pill--muted">箱型图 + 异常值红点</div></div>
+                    </div>
+                    <div class="card__body">
+                      <div class="chart qc-chart"><canvas id="nonngsCanvasVolume" width="300" height="220"></canvas></div>
+                    </div>
+                  </div>
+                  <div class="card">
+                    <div class="card__head">
+                      <div class="card__title">退单率（%）</div>
+                      <div class="card__tools"><div class="pill pill--muted">箱型图 + 异常值红点</div></div>
+                    </div>
+                    <div class="card__body">
+                      <div class="chart qc-chart"><canvas id="nonngsCanvasCancelRate" width="300" height="220"></canvas></div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="card qc__card">
+                  <div class="card__head">
+                    <div class="card__title">退单样本明细</div>
+                    <div class="card__tools"><div class="pill pill--muted">按方法学归属展示</div></div>
+                  </div>
+                  <div class="card__body">
+                    <div class="table table--wide">
+                      <div class="table__row table__row--head nonngs-row-cancel">
+                        <div>工单号</div>
+                        <div>样本号</div>
+                        <div>方法学</div>
+                        <div>项目</div>
+                        <div>样本类型</div>
+                        <div>当前 LIMS 状态</div>
+                        <div>业务映射状态</div>
+                        <div>退单原因</div>
+                      </div>
+                      <div id="nonngsCancelTable"></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <div class="qc-box-modal" id="taskDetailModal" aria-hidden="true">
+            <div class="qc-box-modal__backdrop"></div>
+            <div class="qc-box-modal__content">
+              <div class="qc-box-modal__head">
+                <span class="qc-box-modal__title" id="taskDetailModalTitle">任务详情</span>
+                <button type="button" class="btn btn--ghost" id="taskDetailModalClose">关闭</button>
+              </div>
+              <div class="task-detail" id="taskDetailBody"></div>
+            </div>
+          </div>
 
           <div class="qc-box-modal" id="qcBoxModal" aria-hidden="true">
             <div class="qc-box-modal__backdrop"></div>
@@ -1073,6 +1766,29 @@
                 <button type="button" class="btn btn--ghost" id="plotPreviewModalClose">关闭</button>
               </div>
               <img id="plotPreviewModalImage" alt="放大预览" style="max-width:100%; height:auto; display:block;" />
+            </div>
+          </div>
+
+          <div class="qc-box-modal" id="qcPushExceptionModal" aria-hidden="true">
+            <div class="qc-box-modal__backdrop"></div>
+            <div class="qc-box-modal__content qc-push-exception-modal">
+              <div class="qc-box-modal__head">
+                <span class="qc-box-modal__title" id="qcPushExceptionModalTitle">推送异常</span>
+                <button type="button" class="btn btn--ghost" id="qcPushExceptionModalClose">关闭</button>
+              </div>
+              <div class="qc-note" id="qcPushExceptionModalSub">—</div>
+              <div class="field" style="margin-top: 12px;">
+                <div class="field__label">处理人</div>
+                <select class="select" id="qcPushAssignee" aria-label="选择处理人"></select>
+              </div>
+              <div class="field" style="margin-top: 12px;">
+                <div class="field__label">异常内容（可编辑）</div>
+                <textarea class="lab-input" id="qcPushExceptionText" rows="4" placeholder="请补充异常描述、处理要求等…"></textarea>
+              </div>
+              <div class="qc-push-exception-modal__actions">
+                <button type="button" class="btn btn--ghost" id="qcPushExceptionCancel">取消</button>
+                <button type="button" class="btn" id="qcPushExceptionConfirm">确认推送</button>
+              </div>
             </div>
           </div>
         </section>

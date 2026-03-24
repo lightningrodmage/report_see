@@ -4,6 +4,10 @@
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
   const PROJECTS = ["PT122", "PT228", "PC122", "PC228", "MRD", "CNS", "HE180", "L218"];
+  /** 提取中心：样本类型口径 */
+  const EXT_SAMPLE_TYPES = ["蜡块", "蜡卷", "胸腹水", "脑脊液", "全血"];
+  const NON_NGS_METHODS = ["qPCR", "一代", "IHC", "病理", "毛细管电泳", "其他"];
+  const NON_NGS_CANCEL_REASONS = ["样本量不足", "污染风险", "指标失败", "重复送检", "临床退单"];
   const QC_METRICS = [
     { key: "mapRate", name: "比对率", unit: "%", fmt: (v) => `${v.toFixed(2)}%` },
     { key: "onTargetRate", name: "Reads On Target Rate", unit: "%", fmt: (v) => `${v.toFixed(2)}%` },
@@ -34,6 +38,18 @@
   const SPECIAL_METRICS = ["MSI", "TMB", "HRD", "LOH"];
   const BIO_PEOPLE = ["生信-林泽", "生信-周晴", "生信-韩烁", "生信-许然"];
   const REPORT_PEOPLE = ["报告-张宁", "报告-李珂", "报告-王然", "报告-陈琪"];
+  /** SLA 超期自动指派：按环节对应模块人员池 */
+  const LAB_MODULE_PEOPLE = ["实验员1", "实验员2", "实验员3", "实验员4"];
+  const ANALYSIS_MODULE_PEOPLE = ["分析-陈烁", "分析-刘洋", "分析-魏齐", "分析-丁睿"];
+  const TASK_ASSIGNEE_OPTIONS = [...BIO_PEOPLE, ...REPORT_PEOPLE, "实验室-管理员"];
+  /** 数据统计 · 异常工单处理时长：覆盖实验室/分析/生信/报告等可指派角色 */
+  const ABNORMAL_TASK_PEOPLE = [
+    ...LAB_MODULE_PEOPLE,
+    ...ANALYSIS_MODULE_PEOPLE,
+    ...BIO_PEOPLE,
+    ...REPORT_PEOPLE,
+    "实验室-管理员",
+  ];
 
   const PLOT_TEMPLATES = [
     { id: "volcano", name: "火山图", sub: "差异基因" },
@@ -58,6 +74,15 @@
     { key: "pub", name: "已发布", slaMin: 0, color: ["#2de38b", "#22d3ee"] },
   ];
 
+  const TASKS_STORAGE_KEY = "smartLab.tasks.v1";
+  const TASK_STATUSES = {
+    todo: "todo",
+    doing: "doing",
+    done: "done",
+    rework: "rework",
+    rejected: "rejected",
+  };
+
   const state = {
     paused: false,
     minuteSeries: [], // last 60 minutes net samples in pipeline
@@ -76,6 +101,9 @@
       selectedBatchId: null,
       selectedMetricKey: "mapRate",
       selectedSampleId: null,
+      selectedHeatKey: null,
+      qcToLabId: new Map(),
+      qcPushPending: { taskTitle: "", labIds: [], subtitle: "" },
     },
     qcResult: {
       byBatch: new Map(), // batchId -> qc result data
@@ -101,6 +129,7 @@
       statsPerson: null, // 第一个人员，init 时设
       statsInterveneProject: "PT122",
       statsAbnProject: "PT122",
+      statsAbnTaskMonth: null, // YYYY-MM，数据统计 · 异常工单处理时长
     },
     plotService: {
       selectedTemplateId: "volcano",
@@ -109,7 +138,6 @@
     },
     labAlpha: {
       samples: [],
-      page: 1,
       pageSize: 10,
       filters: {
         barcode: "",
@@ -117,6 +145,40 @@
         batchNo: "",
         dueDateLte: "",
       },
+    },
+    sampleCenter: {
+      page: 1,
+    },
+    ngs: {
+      tab: "monitor",
+      selectedBatchId: "",
+      selectedProjects: new Set(["PT122", "PT228"]),
+      statsScope: "batch",
+      statsBatchNo: "",
+      statsMonth: "",
+      qcControlAddedByBatch: {},
+      activePoolBatchId: "",
+      activePoolId: "",
+      activePoolProject: "",
+    },
+    extraction: {
+      tab: "monitor",
+      monitorDate: "",
+      statsScope: "day",
+      statsDay: "",
+      statsMonth: "",
+    },
+    nonNgs: {
+      tab: "monitor",
+      statsMonth: "",
+    },
+    // 异常闭环任务：告警 -> 任务 -> 处理/返工/拒绝 -> 回填样本与指标
+    tasks: [],
+    tasksUI: {
+      filterStatus: "",
+      filterAssignee: "",
+      filterStageKey: "",
+      selectedTaskId: null,
     },
   };
 
@@ -159,6 +221,527 @@
     let x = seed % 2147483647;
     if (x <= 0) x += 2147483646;
     return () => (x = (x * 16807) % 2147483647) / 2147483647;
+  }
+
+  function safeJsonParse(raw, fallback) {
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return fallback;
+    }
+  }
+
+  function normalizeTask(t) {
+    if (!t || typeof t !== "object") return null;
+    // 升级版演示口径：仅保留三个状态（待分配/处理中/已完成）
+    const rawStatus = Object.values(TASK_STATUSES).includes(t.status) ? t.status : TASK_STATUSES.todo;
+    const status = rawStatus === TASK_STATUSES.done ? TASK_STATUSES.done : rawStatus === TASK_STATUSES.doing ? TASK_STATUSES.doing : TASK_STATUSES.todo;
+    return {
+      id: String(t.id || ""),
+      sourceSampleId: String(t.sourceSampleId || ""),
+      stageKey: String(t.stageKey || ""),
+      status,
+      assignee: String(t.assignee || ""),
+      priority: String(t.priority || ""),
+      description: String(t.description || ""),
+      qcOrigin: !!t.qcOrigin,
+      qcBaseDescription: String(t.qcBaseDescription || ""),
+      createdAt: Number.isFinite(Number(t.createdAt)) ? Number(t.createdAt) : Date.now(),
+      dueAt: Number.isFinite(Number(t.dueAt)) ? Number(t.dueAt) : null,
+      completedAt: Number.isFinite(Number(t.completedAt)) ? Number(t.completedAt) : null,
+      comments: Array.isArray(t.comments) ? t.comments : [],
+      history: Array.isArray(t.history) ? t.history : [],
+    };
+  }
+
+  function loadTasksFromStorage() {
+    const raw = localStorage.getItem(TASKS_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = safeJsonParse(raw, null);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map(normalizeTask).filter(Boolean);
+  }
+
+  function saveTasksToStorage() {
+    try {
+      localStorage.setItem(TASKS_STORAGE_KEY, JSON.stringify(state.tasks));
+    } catch {
+      // ignore write failure (e.g. storage disabled)
+    }
+  }
+
+  function getTaskById(taskId) {
+    return state.tasks.find((t) => t.id === taskId) ?? null;
+  }
+
+  function updateTaskAndPersist(taskId, patch) {
+    const task = getTaskById(taskId);
+    if (!task) return null;
+    Object.assign(task, patch);
+    saveTasksToStorage();
+    return task;
+  }
+
+  function addTaskComment(taskId, author, content) {
+    if (!String(content || "").trim()) return null;
+    const task = getTaskById(taskId);
+    if (!task) return null;
+    const comment = {
+      id: `C_${taskId}_${Date.now()}`,
+      author: String(author || ""),
+      content: String(content),
+      createdAt: Date.now(),
+    };
+    task.comments.push(comment);
+    saveTasksToStorage();
+    return task;
+  }
+
+  function appendTaskHistory(taskId, entry) {
+    const task = getTaskById(taskId);
+    if (!task) return null;
+    const historyEntry = {
+      id: entry?.id ?? `H_${taskId}_${Date.now()}`,
+      status: entry?.status ?? task.status,
+      actor: String(entry?.actor || ""),
+      note: String(entry?.note || ""),
+      createdAt: Number.isFinite(Number(entry?.createdAt)) ? Number(entry.createdAt) : Date.now(),
+    };
+    task.history.push(historyEntry);
+    saveTasksToStorage();
+    return task;
+  }
+
+  function transitionTaskStatus(taskId, nextStatus, actor, note) {
+    const task = getTaskById(taskId);
+    if (!task) return null;
+    // 仅保留：待分配/处理中/已完成
+    const ns = nextStatus === TASK_STATUSES.done ? TASK_STATUSES.done : nextStatus === TASK_STATUSES.doing ? TASK_STATUSES.doing : TASK_STATUSES.todo;
+    task.status = ns;
+    const now = Date.now();
+    if (ns === TASK_STATUSES.done) task.completedAt = now;
+    else task.completedAt = null;
+    appendTaskHistory(taskId, { status: ns, actor, note, createdAt: now });
+    return task;
+  }
+
+  function resetAllTasksToTodo() {
+    if (!Array.isArray(state.tasks)) return;
+    let changed = false;
+    state.tasks.forEach((t) => {
+      if (!t) return;
+      if (t.status !== TASK_STATUSES.todo) {
+        t.status = TASK_STATUSES.todo;
+        t.completedAt = null;
+        changed = true;
+      } else if (t.completedAt) {
+        t.completedAt = null;
+        changed = true;
+      }
+    });
+    if (changed) saveTasksToStorage();
+  }
+
+  function taskIdForSample(sampleId) {
+    return `T_${String(sampleId || "")}`;
+  }
+
+  function stageKeyFromLabStatus(status) {
+    const st = String(status || "");
+    if (st.includes("异常处理")) return "bio";
+    if (st.includes("报告审核")) return "rep";
+    if (st.includes("生信审核")) return "bio";
+    if (st.includes("下机质控") || st.includes("生信分析")) return "ana";
+    if (st.includes("测序") || st.includes("待上机")) return "rep";
+    if (st.includes("杂交") || st.includes("建库")) return "ana";
+    if (st === "实验中") return "exp";
+    if (st.includes("提取") || st.includes("已接收") || st.includes("暂存")) return "exp";
+    if (st.includes("已发布") || st.includes("已退单")) return "pub";
+    return "exp";
+  }
+
+  function getAbnormalCount() {
+    return (state.labAlpha.samples || []).filter((s) => !!s.isAbnormal).length;
+  }
+
+  function getAbnormalCountByStage() {
+    const out = { exp: 0, ana: 0, bio: 0, rep: 0, pub: 0 };
+    (state.labAlpha.samples || []).forEach((s) => {
+      if (!s.isAbnormal) return;
+      const k = stageKeyFromLabStatus(s.status);
+      out[k] = (out[k] || 0) + 1;
+    });
+    return out;
+  }
+
+  /** 超期：停留超过节点 SLA；SLA 异常：剩余周期过短或停留明显超标 */
+  function shouldAutoCaptureSla(sample) {
+    const s = sample;
+    if (!s || s.status === "已发布" || s.status === "暂存中" || s.status === "已退单") return false;
+    const sla = Number(s.slaHours) || 0;
+    if (sla <= 0) return false;
+    const stay = Number(s.stayHours) || 0;
+    const rem = Number(s.remainingHours) || 0;
+    if (stay > sla) return true;
+    if (rem <= 2 && rem >= 0) return true;
+    if (stay > sla * 1.25) return true;
+    return false;
+  }
+
+  function slaStageLabelForSample(sample) {
+    const st = String(sample?.status || "");
+    if (st.includes("异常处理")) return "异常处理";
+    if (st.includes("报告审核")) return "报告审核";
+    if (st.includes("生信审核")) return "生信审核";
+    if (st.includes("下机质控")) return "下机质控";
+    if (st.includes("生信分析")) return "生信分析";
+    if (st.includes("测序")) return "测序";
+    if (st.includes("待上机")) return "待上机";
+    if (st.includes("杂交")) return "杂交";
+    if (st.includes("建库")) return "建库";
+    if (st === "实验中") return "实验中";
+    if (st.includes("提取")) return "提取";
+    if (st.includes("已接收")) return "已接收";
+    if (st.includes("暂存")) return "暂存";
+    const sk = stageKeyFromLabStatus(st);
+    const hit = STAGES.find((x) => x.key === sk);
+    return hit ? hit.name : "当前流程";
+  }
+
+  function slaDescriptionForSample(sample) {
+    return `对应流程SLA超期（${slaStageLabelForSample(sample)}）`;
+  }
+
+  function applySlaAutoCapture() {
+    const samples = state.labAlpha.samples || [];
+    samples.forEach((s) => {
+      if (s.status === "已发布" || s.status === "暂存中" || s.status === "已退单") return;
+      if (s.status === "异常处理中") return;
+      if (!shouldAutoCaptureSla(s)) return;
+      s.isAbnormal = true;
+      const sla = Number(s.slaHours) || 0;
+      const stay = Number(s.stayHours) || 0;
+      if (sla > 0 && stay > sla) s.alertLevel = "高";
+      else if (s.alertLevel === "无") s.alertLevel = "中";
+    });
+  }
+
+  function inferQcTaskMeta(task) {
+    if (task.qcOrigin && task.qcBaseDescription) return;
+    const QC_TITLES = ["数据产出量异常", "质控品失控", "下机质控不通过"];
+    const d = String(task.description || "");
+    const hit = QC_TITLES.find((t) => d === t || d.startsWith(`${t}；`) || d.startsWith(`${t}；对应流程`));
+    if (hit) {
+      task.qcOrigin = true;
+      task.qcBaseDescription = hit;
+    }
+  }
+
+  function refreshAbnormalTaskDescriptions() {
+    let changed = false;
+    state.tasks.forEach((task) => {
+      if (task.status === TASK_STATUSES.done) return;
+      const sample = getLabSampleById(task.sourceSampleId);
+      if (!sample || !sample.isAbnormal) return;
+      inferQcTaskMeta(task);
+      const hasSla = shouldAutoCaptureSla(sample);
+      const slaLine = slaDescriptionForSample(sample);
+      if (task.qcOrigin && task.qcBaseDescription) {
+        const next = hasSla ? `${task.qcBaseDescription}；${slaLine}` : String(task.qcBaseDescription);
+        if (task.description !== next) {
+          task.description = next;
+          changed = true;
+        }
+      } else if (hasSla) {
+        if (task.description !== slaLine) {
+          task.description = slaLine;
+          changed = true;
+        }
+      }
+    });
+    if (changed) saveTasksToStorage();
+  }
+
+  function syncAbnormalTasksPipeline() {
+    applySlaAutoCapture();
+    syncTasksWithAbnormalSamples();
+    refreshAbnormalTaskDescriptions();
+  }
+
+  /** SLA 自动指派：下机质控「之前」环节一律实验室；从下机质控起再按分析/生信/报告模块 */
+  function assigneeForSlaModule(sample) {
+    const sampleId = sample.id;
+    const st = String(sample.status || "");
+    const seed = `${String(sampleId || "")}_${st}`;
+    let h = 2166136261;
+    for (let i = 0; i < seed.length; i++) {
+      h ^= seed.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    const pick = (arr) => arr[Math.abs(h >>> 0) % arr.length];
+    if (st.includes("报告审核")) return pick(REPORT_PEOPLE);
+    if (st.includes("生信审核")) return pick(BIO_PEOPLE);
+    if (st.includes("下机质控")) return pick(ANALYSIS_MODULE_PEOPLE);
+    return pick(LAB_MODULE_PEOPLE);
+  }
+
+  function slaAutoAssignModuleLabel(sample) {
+    const st = String(sample.status || "");
+    if (st.includes("报告审核")) return "报告";
+    if (st.includes("生信审核")) return "生信审核";
+    if (st.includes("下机质控")) return "下机质控";
+    return "实验室";
+  }
+
+  function resolveDesiredAssigneeForAbnormalTask(task, s) {
+    if (task && task.qcOrigin) {
+      return String(task.assignee || s.owner || "").trim() || TASK_ASSIGNEE_OPTIONS[0];
+    }
+    if (shouldAutoCaptureSla(s)) {
+      return assigneeForSlaModule(s);
+    }
+    return String(s.owner || "");
+  }
+
+  function syncTasksWithAbnormalSamples() {
+    if (!Array.isArray(state.labAlpha.samples)) return;
+    const now = Date.now();
+    const abnormalSamples = state.labAlpha.samples.filter((s) => !!s.isAbnormal && s.status !== "已退单");
+    const abnormalById = new Set(abnormalSamples.map((s) => s.id));
+
+    let changed = false;
+    // Ensure tasks exist for each abnormal sample
+    abnormalSamples.forEach((s) => {
+      const sampleId = s.id;
+      const taskId = taskIdForSample(sampleId);
+      const desiredStageKey = stageKeyFromLabStatus(s.status);
+      const desiredPriority = String(s.alertLevel || "低");
+      const desiredDueAt =
+        Number.isFinite(Number(s.remainingHours)) && Number(s.remainingHours) > 0 ? now + Number(s.remainingHours) * 3600 * 1000 : null;
+
+      let task = getTaskById(taskId);
+      if (!task) {
+        const isSla = shouldAutoCaptureSla(s);
+        const desiredAssignee = resolveDesiredAssigneeForAbnormalTask(null, s);
+        const initialStatus = isSla ? TASK_STATUSES.doing : TASK_STATUSES.todo;
+        if (isSla) {
+          s.owner = desiredAssignee;
+        }
+        task = {
+          id: taskId,
+          sourceSampleId: String(sampleId),
+          stageKey: desiredStageKey,
+          status: initialStatus,
+          assignee: desiredAssignee,
+          priority: desiredPriority,
+          description: "",
+          qcOrigin: false,
+          qcBaseDescription: "",
+          createdAt: now,
+          dueAt: desiredDueAt,
+          completedAt: null,
+          comments: [],
+          history: [],
+        };
+        task.history.push({
+          id: `H_${taskId}_${now}`,
+          status: initialStatus,
+          actor: "系统",
+          note: isSla
+            ? `SLA 超期：已自动指派至${slaAutoAssignModuleLabel(s)}（${desiredAssignee}）并进入处理中`
+            : "检测到异常样本，生成闭环任务（管理员已分配）",
+          createdAt: now,
+        });
+        state.tasks.push(task);
+        changed = true;
+        return;
+      }
+
+      const desiredAssignee = resolveDesiredAssigneeForAbnormalTask(task, s);
+
+      if (task.status === TASK_STATUSES.done && abnormalById.has(sampleId)) {
+        const reopenSla = shouldAutoCaptureSla(s);
+        const reopenAssignee = task.qcOrigin
+          ? String(task.assignee || s.owner || "").trim() || TASK_ASSIGNEE_OPTIONS[0]
+          : reopenSla
+            ? assigneeForSlaModule(s)
+            : desiredAssignee;
+        if (reopenSla && !task.qcOrigin) {
+          s.owner = reopenAssignee;
+        }
+        task.status = task.qcOrigin ? TASK_STATUSES.todo : reopenSla ? TASK_STATUSES.doing : TASK_STATUSES.todo;
+        if (!task.qcOrigin) task.assignee = reopenAssignee;
+        task.stageKey = desiredStageKey;
+        task.priority = desiredPriority;
+        task.dueAt = desiredDueAt;
+        task.completedAt = null;
+        task.history.push({
+          id: `H_${taskId}_${now}_reopen`,
+          status: task.status,
+          actor: "系统",
+          note: reopenSla
+            ? `样本重新进入异常：SLA 超期，已指派 ${reopenAssignee} 并进入处理中`
+            : "样本重新进入异常流程，任务重新打开",
+          createdAt: now,
+        });
+        changed = true;
+        return;
+      }
+
+      if (shouldAutoCaptureSla(s) && !task.qcOrigin) {
+        s.owner = desiredAssignee;
+      }
+
+      let desiredStatus = task.status;
+      if (!task.qcOrigin && shouldAutoCaptureSla(s)) {
+        desiredStatus = TASK_STATUSES.doing;
+      }
+
+      const patches = {
+        stageKey: desiredStageKey,
+        assignee: desiredAssignee,
+        priority: desiredPriority,
+        dueAt: desiredDueAt,
+        status: desiredStatus,
+      };
+      Object.keys(patches).forEach((k) => {
+        if (task[k] !== patches[k]) {
+          task[k] = patches[k];
+          changed = true;
+        }
+      });
+    });
+
+    if (changed) saveTasksToStorage();
+  }
+
+  const LAB_STATUS_REWORK_MAP = {
+    exp: "提取中",
+    ana: "建库中",
+    bio: "生信审核中",
+    rep: "报告审核中",
+  };
+
+  function getLabSampleById(sampleId) {
+    return state.labAlpha.samples.find((s) => s.id === sampleId) ?? null;
+  }
+
+  function backfillSampleForTask(task, sample, action, actor) {
+    if (!task || !sample) return;
+
+    if (action === TASK_STATUSES.done) {
+      sample.isAbnormal = false;
+      sample.alertLevel = "无";
+      sample.remainingHours = 0;
+      sample.slaHours = 0;
+      if (sample.resumeStatusAfterException) {
+        sample.status = sample.resumeStatusAfterException;
+        sample.resumeStatusAfterException = null;
+        sample.statusBeforeException = null;
+      } else {
+        sample.status = "生信审核中";
+      }
+      if (actor) sample.owner = actor;
+      return;
+    }
+
+    if (action === TASK_STATUSES.rework) {
+      sample.isAbnormal = true;
+      sample.alertLevel = "高";
+      sample.slaHours = Number.isFinite(sample.slaHours) && sample.slaHours > 0 ? sample.slaHours : 24;
+      // 返工后短时再次预警：把剩余周期重置为 1~2 小时区间
+      const newRemaining = 1 + (Math.random() < 0.5 ? 0 : 1);
+      sample.remainingHours = newRemaining;
+      sample.stayHours = Math.max(1, Math.round(sample.slaHours - newRemaining));
+      sample.status = LAB_STATUS_REWORK_MAP[task.stageKey] ?? "提取中";
+      if (actor) sample.owner = actor;
+      sample.remark = "返工/补做中";
+      return;
+    }
+
+    if (action === TASK_STATUSES.rejected) {
+      sample.isAbnormal = true;
+      sample.alertLevel = "中";
+      sample.slaHours = Number.isFinite(sample.slaHours) && sample.slaHours > 0 ? sample.slaHours : 24;
+      const newRemaining = 2;
+      sample.remainingHours = newRemaining;
+      sample.stayHours = Math.max(1, Math.round(sample.slaHours - newRemaining));
+      sample.status = LAB_STATUS_REWORK_MAP[task.stageKey] ?? "提取中";
+      if (actor) sample.owner = actor;
+      sample.remark = "已拒绝：需补充/复测";
+    }
+  }
+
+  function applyTaskAction(taskId, action, { actor = "", note = "", comment = "" } = {}) {
+    const task = getTaskById(taskId);
+    if (!task) return;
+    const sample = getLabSampleById(task.sourceSampleId);
+    const now = Date.now();
+
+    // 升级版演示口径：只允许待分配->处理中、处理中->已完成
+    if (action !== TASK_STATUSES.done && action !== TASK_STATUSES.doing) return;
+
+    // 待分配->处理中：管理员分配后进入处理中
+    if (action === TASK_STATUSES.doing) {
+      if (actor) {
+        task.assignee = actor;
+        if (sample) sample.owner = actor;
+      }
+      transitionTaskStatus(taskId, TASK_STATUSES.doing, actor || "系统", note || "开始处理");
+      if (comment) addTaskComment(taskId, actor || "系统", comment);
+      renderAll();
+      return;
+    }
+
+    // 完成(解决)
+    if (action === TASK_STATUSES.done) {
+      transitionTaskStatus(taskId, TASK_STATUSES.done, actor || "系统", note || "任务完成（解决）");
+      if (comment) addTaskComment(taskId, actor || "系统", comment);
+      backfillSampleForTask(task, sample, TASK_STATUSES.done, actor || "");
+      renderAll();
+      return;
+    }
+
+    // 返工
+    if (action === TASK_STATUSES.rework) {
+      transitionTaskStatus(taskId, TASK_STATUSES.rework, actor || "系统", note || "任务返工");
+      if (comment) addTaskComment(taskId, actor || "系统", comment);
+      backfillSampleForTask(task, sample, TASK_STATUSES.rework, actor || "");
+      renderAll();
+      return;
+    }
+
+    // 拒绝
+    if (action === TASK_STATUSES.rejected) {
+      transitionTaskStatus(taskId, TASK_STATUSES.rejected, actor || "系统", note || "任务拒绝/退回");
+      if (comment) addTaskComment(taskId, actor || "系统", comment);
+      backfillSampleForTask(task, sample, TASK_STATUSES.rejected, actor || "");
+      renderAll();
+      return;
+    }
+  }
+
+  function terminateTaskAsCancelled(taskId) {
+    const task = getTaskById(taskId);
+    if (!task || task.status === TASK_STATUSES.done) return;
+    const sample = getLabSampleById(task.sourceSampleId);
+    const actorEl = $("#taskActorInput");
+    const actor = (actorEl && actorEl.value) || task.assignee || "系统";
+    transitionTaskStatus(taskId, TASK_STATUSES.done, actor, "退单终止：样本归档为已退单，工单关闭");
+    if (sample) {
+      sample.status = "已退单";
+      sample.isAbnormal = false;
+      sample.alertLevel = "无";
+      sample.slaHours = 0;
+      sample.remainingHours = 0;
+      sample.stayHours = 0;
+      sample.resumeStatusAfterException = null;
+      sample.statusBeforeException = null;
+      const tail = "退单归档";
+      sample.remark = sample.remark && String(sample.remark).trim() ? `${sample.remark}；${tail}` : tail;
+    }
+    saveTasksToStorage();
+    renderAll();
   }
 
   function initSim() {
@@ -705,7 +1288,17 @@
       }
       abnormal[p] = { oocValues, reSeqValues, reExpValues, cancelValues };
     });
-    return { tat, people, intervene, abnormal };
+    const abnormalTaskHandleHours = {};
+    ABNORMAL_TASK_PEOPLE.forEach((name) => {
+      const n = 8 + Math.floor(rnd() * 8);
+      const values = [];
+      for (let i = 0; i < n; i++) {
+        const base = 1.5 + rnd() * 28 + Math.abs(normalRand(rnd)) * 10;
+        values.push(Math.round(base * 10) / 10);
+      }
+      abnormalTaskHandleHours[name] = values;
+    });
+    return { tat, people, intervene, abnormal, abnormalTaskHandleHours };
   }
 
   function genProductivityStatsMonthly() {
@@ -755,7 +1348,7 @@
   }
 
   function renderProductivity() {
-    const root = $("#view-productivity");
+    const root = $("#view-analysis");
     if (!root) return;
     const batches = state.qcSeq.batches;
     if (!batches.length) return;
@@ -921,34 +1514,51 @@
     }).join("");
   }
 
-  const LAB_STATUSES = [
+  /** 主状态口径（全站统一） */
+  const SAMPLE_STATUSES = [
+    "暂存中",
     "已接收",
     "提取中",
+    "实验中",
+    "待建库",
     "建库中",
+    "待杂交",
     "杂交中",
     "待上机",
-    "已上机",
-    "实验室流转完成",
+    "测序中",
+    "生信分析中",
+    "下机质控中",
+    "生信审核中",
+    "报告审核中",
+    "异常处理中",
     "已发布",
+    "已退单",
   ];
+  const EXPERIMENT_SUB_STATUSES = ["待建库", "建库中", "待杂交", "杂交中", "待上机", "测序中"];
+  const SAMPLE_STATUSES_FOR_RANDOM = SAMPLE_STATUSES.filter(
+    (s) => s !== "异常处理中" && s !== "暂存中" && s !== "已退单"
+  );
 
   function genLabAlphaSamples() {
     const now = new Date();
     const seed = Number(`${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}`) + 32001;
     const rnd = seededRand(seed);
     const list = [];
-    const projects = ["PT122", "PT210", "PT330", "Lung50", "CRC80"];
+    const projects = PROJECTS;
     const diag = ["肺腺癌", "肺鳞癌", "结直肠癌", "乳腺癌", "胃癌", "淋巴瘤"];
     const orgs = ["协和医院", "省肿瘤医院", "市人民医院", "肿瘤医院东区", "胸科医院"];
     const sampleTypes = ["组织", "血浆", "蜡块", "穿刺组织"];
     const qaGrades = ["A", "B", "C"];
-    const owners = ["张工", "李工", "王工", "赵工"];
+    const owners = LAB_MODULE_PEOPLE;
     const dueBase = now.getTime() + 2 * 24 * 60 * 60 * 1000;
-    const n = 120;
+    // 结合质控中心批次数量，模拟每批约 150 例样本体量
+    const n = 780;
     for (let i = 0; i < n; i++) {
       const idx = i + 1;
-      const statusIdx = Math.floor(rnd() * LAB_STATUSES.length);
-      const status = LAB_STATUSES[statusIdx];
+      const statusIdx = Math.floor(rnd() * SAMPLE_STATUSES_FOR_RANDOM.length);
+      let status = SAMPLE_STATUSES_FOR_RANDOM[statusIdx];
+      if (rnd() < 0.07) status = "暂存中";
+      else if (status === "提取中" && rnd() < 0.32) status = "实验中";
       const barcode = `BC${String(2303000 + idx).padStart(7, "0")}`;
       const detectNo = `D${String(202503000 + idx).padStart(8, "0")}`;
       const batchNo = `B${String(250300 + Math.floor(idx / 8)).padStart(6, "0")}`;
@@ -963,12 +1573,11 @@
       const libPre = (8 + rnd() * 40).toFixed(2);
       const libPost = (12 + rnd() * 60).toFixed(2);
       const stayHours = Math.round(2 + rnd() * 120);
-      const slaHours =
-        status === "已发布" || status === "实验室流转完成" ? 0 : [24, 36, 48, 60][Math.floor(rnd() * 4)];
+      const slaHours = status === "已发布" || status === "暂存中" ? 0 : [24, 36, 48, 60][Math.floor(rnd() * 4)];
       const remainingHours = Math.max(0, slaHours - stayHours);
       // 控制异常比例：仅对在实验流程中的样本，且“剩余周期很短”或“明显超时”时，按一定概率标记为异常
       const isFlowStage =
-        status !== "已发布" && status !== "实验室流转完成" && status !== "已上机";
+        status !== "已发布" && status !== "暂存中" && status !== "测序中";
       const isTightSla = slaHours > 0 && (remainingHours <= 2 || stayHours > slaHours * 1.25);
       const isAbnormal = isFlowStage && isTightSla && rnd() > 0.45;
       const alertLevel =
@@ -998,13 +1607,24 @@
         tumorPct,
         isExperiment,
         status,
-        remark: rnd() > 0.7 ? "补体积/重提中" : rnd() > 0.8 ? "等待补充临床信息" : "",
+        remark:
+          status === "实验中"
+            ? rnd() > 0.4
+              ? "免建库/杂交/上机测序，直连实验中"
+              : ""
+            : rnd() > 0.7
+              ? "补体积/重提中"
+              : rnd() > 0.8
+                ? "等待补充临床信息"
+                : "",
         stayHours,
         slaHours,
         remainingHours,
         owner: owners[Math.floor(rnd() * owners.length)],
         alertLevel,
         isAbnormal,
+        resumeStatusAfterException: null,
+        statusBeforeException: null,
       });
     }
     return list;
@@ -1012,13 +1632,13 @@
 
   function initLabAlphaSim() {
     state.labAlpha.samples = genLabAlphaSamples();
-    state.labAlpha.page = 1;
+    state.sampleCenter.page = 1;
   }
 
   function getLabFilteredSamples() {
     const { samples, filters } = state.labAlpha;
     return samples.filter((s) => {
-      if (s.status === "已发布") return false;
+      if (s.status === "已发布" || s.status === "已退单") return false;
       if (filters.barcode && !s.barcode.includes(filters.barcode.trim())) return false;
       if (filters.detectNo && !s.detectNo.includes(filters.detectNo.trim())) return false;
       if (filters.batchNo && !s.batchNo.includes(filters.batchNo.trim())) return false;
@@ -1027,66 +1647,112 @@
     });
   }
 
-  function renderLabOverview() {
-    const root = $("#labOverview");
-    if (!root) return;
-    const samples = state.labAlpha.samples || [];
-    const counts = {};
-    LAB_STATUSES.forEach((st) => {
-      counts[st] = 0;
+  function computeSampleDashboardCounts(samples) {
+    const c = {};
+    SAMPLE_STATUSES.forEach((s) => {
+      c[s] = 0;
     });
     samples.forEach((s) => {
-      counts[s.status] = (counts[s.status] || 0) + 1;
+      const st = s.status || "";
+      if (c[st] !== undefined) c[st] += 1;
+      else c[st] = (c[st] || 0) + 1;
     });
     const total = samples.length;
-    const running = samples.filter((s) => s.status !== "已发布" && s.status !== "实验室流转完成").length;
-    const done = samples.filter((s) => s.status === "实验室流转完成" || s.status === "已发布").length;
-    const abn = samples.filter((s) => s.isAbnormal).length;
-    const statusHtml = LAB_STATUSES.map((st, idx) => {
-      const v = counts[st] || 0;
+    const inFlow = samples.filter(
+      (s) => s.status !== "已发布" && s.status !== "暂存中" && s.status !== "已退单"
+    ).length;
+    const inExperiment =
+      EXPERIMENT_SUB_STATUSES.reduce((sum, s) => sum + (c[s] || 0), 0) + (c["实验中"] || 0);
+    const published = c["已发布"] || 0;
+    const abnormal = samples.filter((s) => !!s.isAbnormal).length;
+    return { c, total, inFlow, inExperiment, published, abnormal };
+  }
+
+  function buildSampleOverviewHtml(samples) {
+    const { c, total, inFlow, inExperiment, published, abnormal } = computeSampleDashboardCounts(samples);
+    const subHint = EXPERIMENT_SUB_STATUSES.map((s) => `${s.replace("中", "")} ${fmtInt(c[s] || 0)}`).join(" · ");
+    const shortcut = c["实验中"] || 0;
+    const expHint = shortcut > 0 ? `${subHint} · 直连 ${fmtInt(shortcut)}` : subHint;
+    const statusHtml = SAMPLE_STATUSES.map((st, idx) => {
+      const v = c[st] || 0;
       return `
-        <div class="lab-overview__item lab-overview__item--status-${idx}">
+        <div class="lab-overview__item lab-overview__item--stat lab-overview__item--status-${idx}">
           <div class="lab-overview__label">${st}</div>
           <div class="lab-overview__value">${fmtInt(v)}</div>
           <div class="lab-overview__hint">占比 ${total ? ((v / total) * 100).toFixed(1) : "--"}%</div>
         </div>
       `;
     }).join("");
-    root.innerHTML = `
+    return `
       <div class="lab-overview__item lab-overview__item--total">
         <div class="lab-overview__label">样本总数</div>
         <div class="lab-overview__value">${fmtInt(total)}</div>
-        <div class="lab-overview__hint">包含已发布与在制样本</div>
+        <div class="lab-overview__hint">全流程样本</div>
       </div>
       <div class="lab-overview__item lab-overview__item--running">
-        <div class="lab-overview__label">在制样本</div>
-        <div class="lab-overview__value">${fmtInt(running)}</div>
-        <div class="lab-overview__hint">状态非“实验室流转完成/已发布”</div>
+        <div class="lab-overview__label">流转中</div>
+        <div class="lab-overview__value">${fmtInt(inFlow)}</div>
+        <div class="lab-overview__hint">不含已发布与暂存</div>
       </div>
       <div class="lab-overview__item lab-overview__item--done">
-        <div class="lab-overview__label">已完成/已发布</div>
-        <div class="lab-overview__value">${fmtInt(done)}</div>
-        <div class="lab-overview__hint">实验室流程已闭环</div>
+        <div class="lab-overview__label">已发布</div>
+        <div class="lab-overview__value">${fmtInt(published)}</div>
+        <div class="lab-overview__hint">终态</div>
       </div>
       <div class="lab-overview__item lab-overview__item--abn">
-        <div class="lab-overview__label">异常样本</div>
-        <div class="lab-overview__value">${fmtInt(abn)}</div>
-        <div class="lab-overview__hint">超 SLA 或剩余周期不足</div>
+        <div class="lab-overview__label">异常/预警</div>
+        <div class="lab-overview__value">${fmtInt(abnormal)}</div>
+        <div class="lab-overview__hint">含 SLA 与质控推送</div>
+      </div>
+      <div class="lab-overview__item lab-overview__item--exp">
+        <div class="lab-overview__label">实验中</div>
+        <div class="lab-overview__value">${fmtInt(inExperiment)}</div>
+        <div class="lab-overview__hint">${expHint}</div>
       </div>
       ${statusHtml}
     `;
-    const meta = $("#labOverviewMeta");
+  }
+
+  function syncLabFilterInputsFromState() {
+    const f = state.labAlpha.filters;
+    const map = [
+      ["scFilterBarcode", "barcode"],
+      ["scFilterDetectNo", "detectNo"],
+      ["scFilterBatchNo", "batchNo"],
+      ["scFilterDueDate", "dueDateLte"],
+    ];
+    map.forEach(([id, key]) => {
+      const v = f[key] || "";
+      const el = document.getElementById(id);
+      if (el) el.value = v;
+    });
+  }
+
+  function renderSampleCenterOverview() {
+    const root = $("#scOverview");
+    if (!root) return;
+    const samples = state.labAlpha.samples || [];
+    root.innerHTML = buildSampleOverviewHtml(samples);
+    const meta = $("#scOverviewMeta");
     if (meta) {
-      meta.textContent = `状态总数：${fmtInt(total)} · 在制：${fmtInt(running)} · 异常：${fmtInt(abn)}`;
+      const { total, inFlow, abnormal } = computeSampleDashboardCounts(samples);
+      meta.textContent = `主状态合计 ${fmtInt(total)} · 流转中 ${fmtInt(inFlow)} · 异常 ${fmtInt(abnormal)} · 含直连实验中`;
     }
   }
 
   function labStatusBadge(status) {
     const lower = String(status || "");
     let cls = "";
-    if (lower.includes("已发布") || lower.includes("完成")) cls = "lab-badge-status--done";
-    else if (lower.includes("待") || lower.includes("已上机") || lower.includes("杂交")) cls = "lab-badge-status--warn";
-    else if (lower.includes("提取") || lower.includes("建库")) cls = "";
+    if (lower.includes("已发布")) cls = "lab-badge-status--done";
+    else if (lower.includes("已退单")) cls = "lab-badge-status--bad";
+    else if (lower.includes("异常处理")) cls = "lab-badge-status--bad";
+    else if (lower.includes("暂存")) cls = "lab-badge-status--warn";
+    else if (lower.includes("报告审核") || lower.includes("生信审核")) cls = "lab-badge-status--warn";
+    else if (lower.includes("下机质控") || lower.includes("生信分析")) cls = "";
+    else if (lower.includes("测序") || lower.includes("待上机")) cls = "lab-badge-status--warn";
+    else if (lower.includes("杂交") || lower.includes("建库")) cls = "";
+    else if (lower === "实验中") cls = "";
+    else if (lower.includes("提取") || lower.includes("已接收")) cls = "";
     return `<span class="lab-badge-status ${cls}">${status}</span>`;
   }
 
@@ -1106,16 +1772,28 @@
     return `${d} d ${rh} h`;
   }
 
-  function renderLabStatusTable() {
-    const body = $("#labStatusTable");
-    const metaEl = $("#labStatusMeta");
+  function renderSampleCenterStatusTable() {
+    renderSampleStatusTable({
+      tableBodyId: "scStatusTable",
+      metaElId: "scStatusMeta",
+      wrapId: "scStatusTableWrap",
+      scrollbarId: "scStatusScrollbar",
+      prevBtnId: "scPrevPage",
+      nextBtnId: "scNextPage",
+    });
+  }
+
+  function renderSampleStatusTable(cfg) {
+    const body = $(`#${cfg.tableBodyId}`);
+    const metaEl = $(`#${cfg.metaElId}`);
     if (!body) return;
     const list = getLabFilteredSamples();
     const pageSize = state.labAlpha.pageSize || 10;
     const total = list.length;
     const maxPage = Math.max(1, Math.ceil(total / pageSize));
-    const page = clamp(state.labAlpha.page, 1, maxPage);
-    state.labAlpha.page = page;
+    const pageStore = state.sampleCenter;
+    const page = clamp(pageStore.page, 1, maxPage);
+    pageStore.page = page;
     const start = (page - 1) * pageSize;
     const pageItems = list.slice(start, start + pageSize);
     body.innerHTML = pageItems
@@ -1149,9 +1827,8 @@
         ? `共 ${fmtInt(total)} 条记录，当前第 ${page} / ${maxPage} 页，每页 ${pageSize} 条（可左右滚动查看全部字段）`
         : "暂无符合条件的样本（可调整筛选条件或左右滚动查看）";
     }
-    // 更新自定义水平滚动条宽度，使其与表格内容宽度一致
-    const wrap = $("#labStatusTableWrap");
-    const scrollbar = $("#labStatusScrollbar");
+    const wrap = $(`#${cfg.wrapId}`);
+    const scrollbar = $(`#${cfg.scrollbarId}`);
     if (wrap && scrollbar) {
       const inner = scrollbar.querySelector(".lab-scrollbar__inner");
       if (inner) {
@@ -1159,26 +1836,31 @@
         inner.style.width = `${targetWidth}px`;
       }
     }
-    const prevBtn = $("#labPrevPage");
-    const nextBtn = $("#labNextPage");
+    const prevBtn = $(`#${cfg.prevBtnId}`);
+    const nextBtn = $(`#${cfg.nextBtnId}`);
     if (prevBtn) prevBtn.disabled = page <= 1;
     if (nextBtn) nextBtn.disabled = page >= maxPage;
   }
 
-  function renderLabAbnormalTable() {
-    const body = $("#labAbnormalTable");
+  function renderSampleCenterAbnormalTable() {
+    renderSampleAbnormalTable("scAbnormalTable");
+  }
+
+  function renderSampleAbnormalTable(bodyId) {
+    const body = $(`#${bodyId}`);
     if (!body) return;
     const samples = state.labAlpha.samples || [];
     const list = samples.filter(
       (s) =>
         s.isAbnormal &&
-        s.status !== "已上机" &&
-        s.status !== "实验室流转完成"
+        s.status !== "已发布" &&
+        s.status !== "已退单"
     );
+    const rowCls = "table__row lab-row-abn lab-row-abn--sc";
     body.innerHTML = list
-      .map((s) => {
-        return `
-          <div class="table__row lab-row-abn">
+      .map(
+        (s) => `
+          <div class="${rowCls}">
             <div>${s.barcode}</div>
             <div>${s.detectNo}</div>
             <div>${s.batchNo}</div>
@@ -1187,24 +1869,1231 @@
             <div>${labStatusBadge(s.status)}</div>
             <div>${fmtHours(s.stayHours)}</div>
             <div>${s.slaHours ? `${fmtHours(s.slaHours)}` : "--"}</div>
-            <div>${s.slaHours ? fmtHours(s.remainingHours) : "--"}</div>
             <div>${s.owner}</div>
             <div>${labAlertPill(s.alertLevel)}</div>
           </div>
+        `
+      )
+      .join("");
+  }
+
+  function todayYMD() {
+    return new Date().toISOString().slice(0, 10);
+  }
+
+  function currentMonthYM() {
+    return new Date().toISOString().slice(0, 7);
+  }
+
+  function extGenMonitorData(dayStr) {
+    const seed = Number(String(dayStr || "").replaceAll("-", "")) || 20260324;
+    const rnd = seededRand(seed + 88001);
+    const typeDist = Object.fromEntries(
+      EXT_SAMPLE_TYPES.map((t) => [t, Math.floor(5 + rnd() * 48)])
+    );
+    return {
+      kpi: {
+        pending: Math.floor(12 + rnd() * 38),
+        extracting: Math.floor(6 + rnd() * 26),
+        qc: Math.floor(9 + rnd() * 28),
+        handover: Math.floor(5 + rnd() * 22),
+        fail: Math.floor(1 + rnd() * 14),
+        staging: Math.floor(3 + rnd() * 16),
+      },
+      typeDist,
+      handover: {
+        ngs: Math.floor(3 + rnd() * 17),
+        nonNgs: Math.floor(3 + rnd() * 15),
+        handedNoExp: Math.floor(1 + rnd() * 11),
+        timeout: Math.floor(0 + rnd() * 9),
+      },
+    };
+  }
+
+  function drawExtTypeDistBars(canvas, typeDist) {
+    const ctx = canvas.getContext("2d");
+    const w = canvas.width;
+    const h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
+    const entries = EXT_SAMPLE_TYPES.map((t) => [t, typeDist[t] ?? 0]);
+    const max = Math.max(1, ...entries.map((e) => e[1]));
+    const labelW = 72;
+    const left = 12;
+    const barH = 26;
+    const gap = 10;
+    const barMaxW = w - left - labelW - 56;
+    ctx.font = "12px Inter, system-ui, -apple-system";
+    entries.forEach(([lb, v], i) => {
+      const y = 18 + i * (barH + gap);
+      ctx.fillStyle = "rgba(255,255,255,0.62)";
+      ctx.textAlign = "right";
+      ctx.textBaseline = "middle";
+      ctx.fillText(lb, left + labelW, y + barH / 2);
+      const bw = (barMaxW * v) / max;
+      const grad = ctx.createLinearGradient(left + labelW + 8, 0, left + labelW + 8 + bw, 0);
+      grad.addColorStop(0, "rgba(124,92,255,0.55)");
+      grad.addColorStop(1, "rgba(34,211,238,0.32)");
+      ctx.fillStyle = grad;
+      ctx.fillRect(left + labelW + 8, y, bw, barH);
+      ctx.fillStyle = "rgba(255,255,255,0.82)";
+      ctx.textAlign = "left";
+      ctx.fillText(String(v), left + labelW + 14 + bw, y + barH / 2);
+    });
+  }
+
+  function extGenBoxItemsByType(seedBase, genVal) {
+    return EXT_SAMPLE_TYPES.map((t, i) => {
+      const rnd = seededRand(seedBase + i * 131);
+      const n = 14 + Math.floor(rnd() * 18);
+      const vals = [];
+      for (let k = 0; k < n; k++) vals.push(genVal(t, rnd, k));
+      return { label: t, values: vals };
+    });
+  }
+
+  function extGenStatsBundle(scopeKey) {
+    const seed = Number(String(scopeKey || "").replace(/-/g, "")) || 202603;
+    const dnaYield = extGenBoxItemsByType(seed + 100, (t, rnd) =>
+      clamp(40 + normalRand(rnd) * 35 + (t === "全血" ? 20 : 0), 5, 220)
+    );
+    const rnaYield = extGenBoxItemsByType(seed + 200, (t, rnd) =>
+      clamp(20 + normalRand(rnd) * 25 + (t === "胸腹水" ? 15 : 0), 2, 120)
+    );
+    const dnaConc = extGenBoxItemsByType(seed + 300, (t, rnd) =>
+      clamp(25 + normalRand(rnd) * 18, 4, 120)
+    );
+    const rnaConc = extGenBoxItemsByType(seed + 400, (t, rnd) =>
+      clamp(18 + normalRand(rnd) * 24, 2, 95)
+    );
+    const dnaPur = extGenBoxItemsByType(seed + 500, (t, rnd) =>
+      clamp(1.8 + normalRand(rnd) * 0.12, 1.4, 2.2)
+    );
+    const rnaPur = extGenBoxItemsByType(seed + 600, (t, rnd) =>
+      clamp(1.95 + normalRand(rnd) * 0.1, 1.6, 2.2)
+    );
+    return { dnaYield, rnaYield, dnaConc, rnaConc, dnaPur, rnaPur };
+  }
+
+  function buildExtractionRiskRows(dayStr) {
+    const RISK_TYPES = [
+      "待提取超时",
+      "提取停留过长",
+      "提取完成未质检",
+      "质控失败未补提",
+      "质检通过未交接下游",
+    ];
+    const tasks = (state.tasks || []).filter((t) => t.status !== TASK_STATUSES.done);
+    const samples = state.labAlpha.samples || [];
+    const rows = [];
+    tasks.forEach((t, i) => {
+      const s = samples.find((x) => String(x.id) === String(t.sourceSampleId));
+      if (!s) return;
+      rows.push({
+        barcode: s.barcode,
+        riskType: RISK_TYPES[i % RISK_TYPES.length],
+        sampleType: s.sampleType || "组织",
+        status: s.status,
+        stay: fmtHours(s.stayHours),
+        owner: s.owner || t.assignee || "--",
+        taskId: t.id,
+      });
+    });
+    const rnd = seededRand(Number(String(dayStr).replace(/-/g, "")) + 777);
+    let k = 0;
+    while (rows.length < 8) {
+      rows.push({
+        barcode: `RK${String(1000 + k).slice(1)}`,
+        riskType: RISK_TYPES[k % RISK_TYPES.length],
+        sampleType: EXT_SAMPLE_TYPES[k % EXT_SAMPLE_TYPES.length],
+        status: "待提取",
+        stay: fmtMin(40 + rnd() * 120),
+        owner: LAB_MODULE_PEOPLE[k % LAB_MODULE_PEOPLE.length],
+        taskId: `T-EXT-${k}`,
+      });
+      k++;
+    }
+    return rows.slice(0, 14);
+  }
+
+  function extHandoverModalRows(kind, dayStr) {
+    const seed = Number(String(dayStr).replace(/-/g, "")) + kind.length * 997;
+    const rnd = seededRand(seed);
+    const n = 5 + Math.floor(rnd() * 7);
+    const rows = [];
+    for (let i = 0; i < n; i++) {
+      rows.push({
+        barcode: `HB${String(10000 + i)}`,
+        detectNo: `D${20260300 + i}`,
+        sampleType: EXT_SAMPLE_TYPES[i % EXT_SAMPLE_TYPES.length],
+        project: PROJECTS[i % PROJECTS.length],
+        stay: fmtMin(20 + rnd() * 400),
+        owner: LAB_MODULE_PEOPLE[i % LAB_MODULE_PEOPLE.length],
+      });
+    }
+    return rows;
+  }
+
+  const EXT_HANDOVER_TITLES = {
+    ngs: "待交接二代组 · 样本明细",
+    "non-ngs": "待交接非二代组 · 样本明细",
+    "handed-no-exp": "已交接但未实验 · 样本明细",
+    timeout: "超时未交接 · 样本明细",
+  };
+
+  function openExtHandoverModal(kind) {
+    const modal = $("#extHandoverModal");
+    const title = $("#extHandoverModalTitle");
+    const body = $("#extHandoverModalBody");
+    if (!modal || !title || !body) return;
+    const day = state.extraction.monitorDate || todayYMD();
+    title.textContent = EXT_HANDOVER_TITLES[kind] || "样本明细";
+    const rows = extHandoverModalRows(kind, day);
+    body.innerHTML = rows
+      .map(
+        (r) => `
+      <div class="table__row ext-row-handover-modal">
+        <div>${r.barcode}</div>
+        <div>${r.detectNo}</div>
+        <div>${r.sampleType}</div>
+        <div>${r.project}</div>
+        <div>${r.stay}</div>
+        <div>${r.owner}</div>
+      </div>`
+      )
+      .join("");
+    modal.classList.add("is-open");
+    modal.setAttribute("aria-hidden", "false");
+  }
+
+  function closeExtHandoverModal() {
+    const modal = $("#extHandoverModal");
+    if (!modal) return;
+    modal.classList.remove("is-open");
+    modal.setAttribute("aria-hidden", "true");
+  }
+
+  function applyExtractionTabUI(tab) {
+    const root = $("#view-lab-extraction");
+    if (!root) return;
+    $$(".ext-tab", root).forEach((b) => {
+      const on = b.getAttribute("data-ext-tab") === tab;
+      b.classList.toggle("is-active", on);
+      b.setAttribute("aria-selected", on ? "true" : "false");
+    });
+    $$(".ext-panel", root).forEach((p) => {
+      const on = p.getAttribute("data-ext-panel") === tab;
+      if (on) p.removeAttribute("hidden");
+      else p.setAttribute("hidden", "");
+      p.classList.toggle("is-active", on);
+    });
+  }
+
+  function setExtractionTab(tab) {
+    state.extraction.tab = tab;
+    applyExtractionTabUI(tab);
+    if (tab === "monitor") renderExtractionMonitor();
+    if (tab === "stats") renderExtractionStats();
+    if (tab === "transfer") renderExtractionTransfer();
+  }
+
+  function ensureExtractionDefaults() {
+    const ex = state.extraction;
+    if (!ex.monitorDate) ex.monitorDate = todayYMD();
+    if (!ex.statsDay) ex.statsDay = todayYMD();
+    if (!ex.statsMonth) ex.statsMonth = currentMonthYM();
+  }
+
+  function renderExtractionStatsSeg() {
+    const seg = $("#extStatsScopeSeg");
+    if (!seg) return;
+    const scope = state.extraction.statsScope || "day";
+    if (seg.dataset.extScope === scope && seg.innerHTML.trim()) return;
+    seg.dataset.extScope = scope;
+    seg.innerHTML = ["day", "month"]
+      .map((k) => {
+        const active = scope === k;
+        const label = k === "day" ? "按日" : "按月";
+        return `
+          <label class="seg__item ${active ? "is-active" : ""}">
+            <input type="radio" name="extStatsScope" value="${k}" ${active ? "checked" : ""}/>
+            <span>${label}</span>
+          </label>
         `;
       })
       .join("");
   }
 
+  function renderExtractionMonitor() {
+    ensureExtractionDefaults();
+    const day = state.extraction.monitorDate || todayYMD();
+    const md = $("#extMonitorDate");
+    if (md) md.value = day;
+    setText("extMonitorDateHint", `统计日 ${day} · 当批次样本类型分布`);
+
+    const data = extGenMonitorData(day);
+    setText("extKpiPending", fmtInt(data.kpi.pending));
+    setText("extKpiExtracting", fmtInt(data.kpi.extracting));
+    setText("extKpiQc", fmtInt(data.kpi.qc));
+    setText("extKpiHandover", fmtInt(data.kpi.handover));
+    setText("extKpiFail", fmtInt(data.kpi.fail));
+    setText("extKpiStaging", fmtInt(data.kpi.staging));
+
+    const total = EXT_SAMPLE_TYPES.reduce((s, t) => s + (data.typeDist[t] || 0), 0);
+    setText("extTypeDistMeta", `合计 ${fmtInt(total)} 例样本 · 按类型`);
+
+    const c = $("#extCanvasTypeDist");
+    if (c) drawExtTypeDistBars(c, data.typeDist);
+
+    setText("extHandoverNgs", fmtInt(data.handover.ngs));
+    setText("extHandoverNonNgs", fmtInt(data.handover.nonNgs));
+    setText("extHandoverHanded", fmtInt(data.handover.handedNoExp));
+    setText("extHandoverTimeout", fmtInt(data.handover.timeout));
+
+    const riskBody = $("#extRiskTable");
+    if (riskBody) {
+      const risks = buildExtractionRiskRows(day);
+      riskBody.innerHTML = risks
+        .map(
+          (r) => `
+        <div class="table__row ext-row-risk">
+          <div>${r.barcode}</div>
+          <div>${r.riskType}</div>
+          <div>${r.sampleType}</div>
+          <div>${r.status}</div>
+          <div>${r.stay}</div>
+          <div>${r.owner}</div>
+          <div>${r.taskId}</div>
+        </div>`
+        )
+        .join("");
+    }
+  }
+
+  function renderExtractionStats() {
+    ensureExtractionDefaults();
+    renderExtractionStatsSeg();
+    const scope = state.extraction.statsScope || "day";
+    const dayField = $("#extStatsDayField");
+    const monthField = $("#extStatsMonthField");
+    if (dayField) dayField.style.display = scope === "day" ? "" : "none";
+    if (monthField) monthField.style.display = scope === "month" ? "" : "none";
+
+    const dayEl = $("#extStatsDay");
+    const monthEl = $("#extStatsMonth");
+    if (dayEl && dayEl.value !== state.extraction.statsDay) dayEl.value = state.extraction.statsDay;
+    if (monthEl && monthEl.value !== state.extraction.statsMonth) monthEl.value = state.extraction.statsMonth;
+
+    const statsKey = scope === "month" ? state.extraction.statsMonth : state.extraction.statsDay;
+    setText(
+      "extStatsHint",
+      scope === "month" ? `统计月 ${statsKey} · 箱型图聚合该月数据` : `统计日 ${statsKey} · 箱型图聚合该日数据`
+    );
+
+    const bundle = extGenStatsBundle(statsKey);
+
+    const drawOpts = { rotateLabels: true, padB: 52, yFmt: (v) => fmtNum(v, 1) };
+    const c1 = $("#extCanvasDnaYield");
+    if (c1) drawCategoryBoxWithOutliers(c1, bundle.dnaYield, { ...drawOpts, yFmt: (v) => `${fmtNum(v, 1)} ng` });
+    const c2 = $("#extCanvasRnaYield");
+    if (c2) drawCategoryBoxWithOutliers(c2, bundle.rnaYield, { ...drawOpts, yFmt: (v) => `${fmtNum(v, 1)} ng` });
+    const c3 = $("#extCanvasDnaConc");
+    if (c3) drawCategoryBoxWithOutliers(c3, bundle.dnaConc, { ...drawOpts, yFmt: (v) => `${fmtNum(v, 1)}` });
+    const c4 = $("#extCanvasRnaConc");
+    if (c4) drawCategoryBoxWithOutliers(c4, bundle.rnaConc, { ...drawOpts, yFmt: (v) => `${fmtNum(v, 1)}` });
+    const c5 = $("#extCanvasDnaPur");
+    if (c5) drawCategoryBoxWithOutliers(c5, bundle.dnaPur, { ...drawOpts, yFmt: (v) => `${fmtNum(v, 2)}` });
+    const c6 = $("#extCanvasRnaPur");
+    if (c6) drawCategoryBoxWithOutliers(c6, bundle.rnaPur, { ...drawOpts, yFmt: (v) => `${fmtNum(v, 2)}` });
+
+    const lowBody = $("#extLowQualityTable");
+    if (lowBody) {
+      const rnd = seededRand(Number(String(statsKey).replace(/-/g, "")) + 888);
+      const n = 6 + Math.floor(rnd() * 5);
+      const reasons = ["DNA 浓度偏低", "RNA 降解风险", "A260/A280 异常", "总量不足"];
+      lowBody.innerHTML = Array.from({ length: n }, (_, i) => {
+        const st = EXT_SAMPLE_TYPES[i % EXT_SAMPLE_TYPES.length];
+        const p = PROJECTS[i % PROJECTS.length];
+        return `
+        <div class="table__row ext-row-low">
+          <div>LQ${8000 + i}</div>
+          <div>${st}</div>
+          <div>${p}</div>
+          <div class="ta-r">${fmtNum(8 + rnd() * 6, 1)}</div>
+          <div class="ta-r">${fmtNum(4 + rnd() * 5, 1)}</div>
+          <div>${reasons[i % reasons.length]}</div>
+        </div>`;
+      }).join("");
+    }
+
+    const head = $("#extPassRateHead");
+    const passBody = $("#extPassRateBody");
+    if (head && passBody) {
+      const rnd = seededRand(Number(String(statsKey).replace(/-/g, "")) + 999);
+      const projs = PROJECTS.slice(0, 6);
+      head.innerHTML = `<div>项目</div>${EXT_SAMPLE_TYPES.map((t) => `<div class="ta-r">${t}</div>`).join("")}<div class="ta-r">综合</div>`;
+      passBody.innerHTML = projs
+        .map((p) => {
+          const cells = EXT_SAMPLE_TYPES.map(() => {
+            const v = 62 + rnd() * 35;
+            return `<div class="ta-r">${fmtNum(v, 1)}%</div>`;
+          }).join("");
+          const avg = 68 + rnd() * 28;
+          return `<div class="table__row ext-row-pass"><div>${p}</div>${cells}<div class="ta-r">${fmtNum(avg, 1)}%</div></div>`;
+        })
+        .join("");
+    }
+  }
+
+  function renderExtractionTransfer() {
+    const day = state.extraction.monitorDate || todayYMD();
+    setText("extTransferMeta", `展示日 ${day} · 与监控台交接口径一致`);
+    const rnd = seededRand(Number(day.replace(/-/g, "")) + 1200);
+    const body = $("#extTransferTable");
+    if (!body) return;
+    const n = 6 + Math.floor(rnd() * 8);
+    const dirs = ["转出", "接收确认"];
+    const targets = ["二代实验室", "非二代实验室"];
+    const statuses = ["待签收", "已签收", "运输中"];
+    const ops = ["实验员A", "实验员B", "交接班"];
+    body.innerHTML = Array.from({ length: n }, (_, i) => {
+      const ts = `${day} ${String(8 + Math.floor(rnd() * 10)).padStart(2, "0")}:${String(Math.floor(rnd() * 60)).padStart(2, "0")}`;
+      return `
+      <div class="table__row ext-row-transfer">
+        <div>${ts}</div>
+        <div>TR${9000 + i}</div>
+        <div>${dirs[i % dirs.length]}</div>
+        <div>${targets[i % targets.length]}</div>
+        <div>${statuses[i % statuses.length]}</div>
+        <div>${ops[i % ops.length]}</div>
+      </div>`;
+    }).join("");
+  }
+
+  function renderExtractionCenter() {
+    const root = $("#view-lab-extraction");
+    if (!root || !root.classList.contains("is-active")) return;
+    if (!state.labAlpha.samples.length) initLabAlphaSim();
+    syncAbnormalTasksPipeline();
+    ensureExtractionDefaults();
+    applyExtractionTabUI(state.extraction.tab || "monitor");
+    const tab = state.extraction.tab || "monitor";
+    if (tab === "monitor") renderExtractionMonitor();
+    if (tab === "stats") renderExtractionStats();
+    if (tab === "transfer") renderExtractionTransfer();
+  }
+
+  function getNgsStatuses() {
+    return ["待建库", "建库中", "待杂交", "杂交中", "待上机", "测序中", "实验室流转完成"];
+  }
+
+  function toNgsFlowStatus(sample) {
+    const st = String(sample?.status || "");
+    if (st === "待建库" || st === "建库中" || st === "待杂交" || st === "杂交中" || st === "待上机" || st === "测序中") return st;
+    if (st === "实验中") return "待建库";
+    if (st.includes("生信") || st.includes("报告") || st.includes("下机") || st === "已发布") return "实验室流转完成";
+    return null;
+  }
+
+  function ngsFlowSamples() {
+    return (state.labAlpha.samples || [])
+      .map((s) => ({ ...s, ngsFlowStatus: toNgsFlowStatus(s) }))
+      .filter((s) => !!s.ngsFlowStatus);
+  }
+
+  function ngsBatchOptionsFromQc() {
+    const batches = state.qcSeq?.batches || [];
+    return batches.map((b) => ({
+      id: b.id,
+      label: `${b.id} · ${b.runName || "--"}`,
+      runName: b.runName || "--",
+      flowcell: b.flowcell || "--",
+    }));
+  }
+
+  function ngsSampleBatchId(sample) {
+    const opts = ngsBatchOptionsFromQc();
+    if (!opts.length) return sample.batchNo || "--";
+    const idx = stableHash(sample.batchNo || sample.id || "") % opts.length;
+    return opts[idx].id;
+  }
+
+  function getNgsQcControlAdded(batchId, project) {
+    const k = String(batchId || "");
+    const p = String(project || "");
+    const byBatch = state.ngs.qcControlAddedByBatch[k] || {};
+    return byBatch[p] || { pos: false, neg: false };
+  }
+
+  function setNgsQcControlAdded(batchId, project, kind) {
+    const k = String(batchId || "");
+    const p = String(project || "");
+    if (!k || !p) return;
+    const byBatch = state.ngs.qcControlAddedByBatch[k] || {};
+    const cur = byBatch[p] || { pos: false, neg: false };
+    const next = { ...cur };
+    if (kind === "pos") next.pos = true;
+    if (kind === "neg") next.neg = true;
+    state.ngs.qcControlAddedByBatch[k] = { ...byBatch, [p]: next };
+  }
+
+  function ensureNgsDefaults() {
+    const batches = ngsBatchOptionsFromQc();
+    if (!state.ngs.selectedBatchId && batches.length) state.ngs.selectedBatchId = batches[0].id;
+    if (!state.ngs.statsBatchNo && batches.length) state.ngs.statsBatchNo = batches[0].id;
+    if (!state.ngs.statsMonth) state.ngs.statsMonth = currentMonthYM();
+  }
+
+  function applyNgsTabUI(tab) {
+    const root = $("#view-lab-ngs");
+    if (!root) return;
+    $$(".ngs-tab", root).forEach((b) => {
+      const on = b.getAttribute("data-ngs-tab") === tab;
+      b.classList.toggle("is-active", on);
+      b.setAttribute("aria-selected", on ? "true" : "false");
+    });
+    $$(".ngs-panel", root).forEach((p) => {
+      const on = p.getAttribute("data-ngs-panel") === tab;
+      if (on) p.removeAttribute("hidden");
+      else p.setAttribute("hidden", "");
+      p.classList.toggle("is-active", on);
+    });
+  }
+
+  function renderNgsBatchSeg(samples) {
+    const seg = $("#ngsBatchSeg");
+    if (!seg) return;
+    const batches = ngsBatchOptionsFromQc().slice(0, 10);
+    seg.innerHTML = batches
+      .map((b) => {
+        const active = state.ngs.selectedBatchId === b.id;
+        return `<label class="seg__item ${active ? "is-active" : ""}"><input type="radio" name="ngsBatch" value="${b.id}" ${active ? "checked" : ""}/><span>${b.id}</span></label>`;
+      })
+      .join("");
+  }
+
+  function renderNgsProjectChips(samples) {
+    const root = $("#ngsProjectChips");
+    if (!root) return;
+    const projs = Array.from(new Set(samples.map((s) => s.project))).slice(0, 8);
+    root.innerHTML = projs
+      .map((p) => {
+        const active = state.ngs.selectedProjects.has(p);
+        return `<label class="chip ${active ? "is-active" : ""}"><input type="checkbox" name="ngsProject" value="${p}" ${active ? "checked" : ""}/><span>${p}</span></label>`;
+      })
+      .join("");
+  }
+
+  function renderNgsMonitor() {
+    const samples = ngsFlowSamples();
+    ensureNgsDefaults();
+    const samplesWithQcBatch = samples.map((s) => ({ ...s, ngsBatchId: ngsSampleBatchId(s) }));
+    const statuses = getNgsStatuses();
+    const counts = Object.fromEntries(statuses.map((s) => [s, 0]));
+    samplesWithQcBatch.forEach((s) => {
+      counts[s.ngsFlowStatus] = (counts[s.ngsFlowStatus] || 0) + 1;
+    });
+    setText("ngsKpiPendingLib", fmtInt(counts["待建库"] || 0));
+    setText("ngsKpiLibDoing", fmtInt(counts["建库中"] || 0));
+    setText("ngsKpiPendingHyb", fmtInt(counts["待杂交"] || 0));
+    setText("ngsKpiHybDoing", fmtInt(counts["杂交中"] || 0));
+    setText("ngsKpiPendingRun", fmtInt(counts["待上机"] || 0));
+    setText("ngsKpiSeqDoing", fmtInt(counts["测序中"] || 0));
+    setText("ngsKpiDone", fmtInt(counts["实验室流转完成"] || 0));
+
+    const riskRows = samplesWithQcBatch
+      .filter((s) => s.isAbnormal || (s.remainingHours || 0) <= 2)
+      .slice(0, 16)
+      .map((s) => {
+        const riskType =
+          s.ngsFlowStatus === "待建库" || s.ngsFlowStatus === "建库中"
+            ? "建库环节超时"
+            : s.ngsFlowStatus === "待杂交" || s.ngsFlowStatus === "杂交中"
+            ? "杂交环节停留过长"
+            : s.ngsFlowStatus === "待上机"
+            ? "待上机超时"
+            : s.ngsFlowStatus === "测序中"
+            ? "测序进度滞后"
+            : "流转异常";
+        return `<div class="table__row ngs-row-risk"><div>${s.barcode}</div><div>${riskType}</div><div>${s.project}</div><div>${s.ngsFlowStatus}</div><div>${fmtHours(s.stayHours)}</div><div>${s.owner}</div><div>${s.alertLevel || "中"}</div></div>`;
+      })
+      .join("");
+    const riskBody = $("#ngsRiskTable");
+    if (riskBody) riskBody.innerHTML = riskRows || `<div class="muted">暂无风险样本</div>`;
+
+    renderNgsBatchSeg(samplesWithQcBatch);
+    renderNgsProjectChips(samplesWithQcBatch);
+
+    const selectedBatchId = state.ngs.selectedBatchId;
+    const batchSamples = samplesWithQcBatch.filter((s) => s.ngsBatchId === selectedBatchId);
+    const projMap = {};
+    batchSamples.forEach((s) => {
+      projMap[s.project] = (projMap[s.project] || 0) + 1;
+    });
+    const summary = $("#ngsBatchSummary");
+    if (summary) {
+      const txt = Object.entries(projMap)
+        .slice(0, 8)
+        .map(([p, n]) => `${p}：${fmtInt(n)}`)
+        .join(" · ");
+      summary.innerHTML = `<div><b>选中批次：</b>${selectedBatchId || "--"}</div><div><b>样本数：</b>${fmtInt(batchSamples.length)}</div><div><b>项目组成：</b>${txt || "--"}</div>`;
+    }
+
+    const selectedProjects = Array.from(state.ngs.selectedProjects);
+    const libRows = batchSamples
+      .filter((s) => selectedProjects.includes(s.project))
+      .filter((s) => ["待建库", "建库中", "待杂交"].includes(s.ngsFlowStatus))
+      .slice(0, 40)
+      .map((s) => {
+        const conc = s.ngsFlowStatus === "待杂交" ? `${fmtNum(Number(s.libPost), 2)} ng/µL` : "--";
+        return `<div class="table__row ngs-row-lib"><div>${s.barcode}</div><div>${s.ngsBatchId}</div><div>${s.project}</div><div>${s.ngsFlowStatus}</div><div>${conc}</div><div>${s.owner}</div></div>`;
+      })
+      .join("");
+    const libBody = $("#ngsLibTable");
+    if (libBody) libBody.innerHTML = libRows || `<div class="muted">暂无建库样本</div>`;
+
+    const poolMap = new Map();
+    batchSamples
+      .filter((s) => s.ngsFlowStatus === "待杂交" || s.ngsFlowStatus === "待上机")
+      .forEach((s) => {
+      const proj = s.project;
+      if (!poolMap.has(proj)) poolMap.set(proj, []);
+      const pools = poolMap.get(proj);
+      const poolNo = `POOL-${proj}-${(stableHash(s.barcode) % 3) + 1}`;
+      if (!pools.includes(poolNo)) pools.push(poolNo);
+      });
+    const poolBody = $("#ngsPoolTable");
+    if (poolBody) {
+      poolBody.innerHTML = Array.from(poolMap.entries())
+        .map(([proj, pools]) => {
+          const btns = pools
+            .map((p) => `<button type="button" class="btn btn--ghost ngs-pool-btn" data-ngs-pool="${p}" data-ngs-proj="${proj}">${p}</button>`)
+            .join("");
+          return `<div class="table__row ngs-row-pool"><div>${proj}</div><div>${fmtInt(pools.length)}</div><div>${btns}</div></div>`;
+        })
+        .join("");
+    }
+
+    const runMap = new Map();
+    const qcBatchById = new Map((state.qcSeq?.batches || []).map((b) => [b.id, b]));
+    batchSamples.forEach((s) => {
+      const qb = qcBatchById.get(s.ngsBatchId);
+      if (!qb) return;
+      const run = qb.runName || qb.id;
+      if (!runMap.has(run)) runMap.set(run, { batchNo: qb.id, pools: new Set(), count: 0, status: s.ngsFlowStatus === "测序中" ? "测序中" : "待上机" });
+      const item = runMap.get(run);
+      item.pools.add(`POOL-${s.project}-${(stableHash(s.barcode) % 3) + 1}`);
+      item.count += 1;
+    });
+    const runBody = $("#ngsRunTable");
+    if (runBody) {
+      runBody.innerHTML = Array.from(runMap.entries())
+        .slice(0, 18)
+        .map(([run, v]) => `<div class="table__row ngs-row-run"><div>${run}</div><div>${v.batchNo}</div><div>${v.status}</div><div class="ta-r">${fmtInt(v.pools.size)}</div><div class="ta-r">${fmtInt(v.count)}</div></div>`)
+        .join("");
+    }
+  }
+
+  function ngsStatItemsByProject(seedBase, gen) {
+    return PROJECTS.slice(0, 8).map((p, i) => {
+      const rnd = seededRand(seedBase + i * 97);
+      const values = Array.from({ length: 20 + Math.floor(rnd() * 12) }, () => gen(rnd, p));
+      return { label: p, values };
+    });
+  }
+
+  function renderNgsStatsScopeSeg() {
+    const seg = $("#ngsStatsScopeSeg");
+    if (!seg) return;
+    const scope = state.ngs.statsScope || "batch";
+    seg.innerHTML = ["batch", "month"]
+      .map((k) => `<label class="seg__item ${scope === k ? "is-active" : ""}"><input type="radio" name="ngsStatsScope" value="${k}" ${scope === k ? "checked" : ""}/><span>${k === "batch" ? "按批次" : "按月份"}</span></label>`)
+      .join("");
+  }
+
+  function renderNgsStats() {
+    const samples = ngsFlowSamples();
+    ensureNgsDefaults();
+    renderNgsStatsScopeSeg();
+    const batchField = $("#ngsStatsBatchField");
+    const monthField = $("#ngsStatsMonthField");
+    const scope = state.ngs.statsScope || "batch";
+    if (batchField) batchField.style.display = scope === "batch" ? "" : "none";
+    if (monthField) monthField.style.display = scope === "month" ? "" : "none";
+    const batchSel = $("#ngsStatsBatchSelect");
+    if (batchSel) {
+      const batches = ngsBatchOptionsFromQc();
+      upsertOptions(
+        batchSel,
+        batches.map((b) => ({ value: b.id, label: `${b.id} · ${b.runName}` })),
+        state.ngs.statsBatchNo || batches[0]?.id || ""
+      );
+      state.ngs.statsBatchNo = batchSel.value;
+    }
+    const monthInput = $("#ngsStatsMonthInput");
+    if (monthInput && monthInput.value !== state.ngs.statsMonth) monthInput.value = state.ngs.statsMonth;
+    const key = scope === "month" ? state.ngs.statsMonth : state.ngs.statsBatchNo;
+    setText("ngsStatsMeta", scope === "month" ? `按月份 ${key} 统计` : `按批次 ${key} 统计`);
+    const seed = Number(String(key || "").replaceAll("-", "")) || 202603;
+    const preConc = ngsStatItemsByProject(seed + 11, (r) => clamp(12 + normalRand(r) * 6, 2, 40));
+    const preYield = ngsStatItemsByProject(seed + 22, (r) => clamp(180 + normalRand(r) * 60, 40, 420));
+    const finalConc = ngsStatItemsByProject(seed + 33, (r) => clamp(20 + normalRand(r) * 7, 3, 55));
+    const finalYield = ngsStatItemsByProject(seed + 44, (r) => clamp(140 + normalRand(r) * 45, 20, 360));
+    const failRate = ngsStatItemsByProject(seed + 55, (r) => clamp(3 + Math.abs(normalRand(r)) * 4.5, 0.2, 22));
+    const opts = { rotateLabels: true, padB: 56 };
+    const c1 = $("#ngsCanvasPreConc");
+    if (c1) drawCategoryBoxWithOutliers(c1, preConc, { ...opts, yFmt: (v) => `${fmtNum(v, 1)} ng/µL` });
+    const c2 = $("#ngsCanvasPreYield");
+    if (c2) drawCategoryBoxWithOutliers(c2, preYield, { ...opts, yFmt: (v) => `${fmtNum(v, 0)} ng` });
+    const c3 = $("#ngsCanvasFinalConc");
+    if (c3) drawCategoryBoxWithOutliers(c3, finalConc, { ...opts, yFmt: (v) => `${fmtNum(v, 1)} ng/µL` });
+    const c4 = $("#ngsCanvasFinalYield");
+    if (c4) drawCategoryBoxWithOutliers(c4, finalYield, { ...opts, yFmt: (v) => `${fmtNum(v, 0)} ng` });
+    const c5 = $("#ngsCanvasFailRate");
+    if (c5) drawCategoryBoxWithOutliers(c5, failRate, { ...opts, yFmt: (v) => `${fmtNum(v, 1)}%` });
+
+    const rnd = seededRand(seed + 1001);
+    const cancelBody = $("#ngsCancelTable");
+    if (cancelBody) {
+      const reasons = ["样本量不足", "污染风险", "文库构建失败", "重复送检", "临床退单"];
+      cancelBody.innerHTML = Array.from({ length: 8 }, (_, i) => {
+        const p = PROJECTS[i % PROJECTS.length];
+        const st = ["蜡块", "蜡卷", "胸腹水", "脑脊液", "全血"][i % 5];
+        return `<div class="table__row ngs-row-cancel"><div>CX${9000 + i}</div><div>B${260100 + i}</div><div>${p}</div><div>${st}</div><div>${reasons[Math.floor(rnd() * reasons.length)]}</div></div>`;
+      }).join("");
+    }
+
+    const successHead = $("#ngsSuccessHead");
+    const successBody = $("#ngsSuccessBody");
+    const types = ["蜡块", "蜡卷", "胸腹水", "脑脊液", "全血"];
+    if (successHead && successBody) {
+      successHead.innerHTML = `<div>项目</div>${types.map((t) => `<div class="ta-r">${t}</div>`).join("")}`;
+      successBody.innerHTML = PROJECTS.slice(0, 8)
+        .map((p, i) => {
+          const r = seededRand(seed + i * 113);
+          const cells = types.map(() => `<div class="ta-r">${fmtNum(72 + r() * 26, 1)}%</div>`).join("");
+          return `<div class="table__row ngs-row-success"><div>${p}</div>${cells}</div>`;
+        })
+        .join("");
+    }
+
+    const probeBody = $("#ngsProbeTable");
+    if (probeBody) {
+      probeBody.innerHTML = PROJECTS.slice(0, 8)
+        .map((p, i) => {
+          const poolN = 4 + (seededRand(seed + i * 9)() * 12) | 0;
+          return `<div class="table__row ngs-row-probe"><div>${p}</div><div class="ta-r">${fmtInt(poolN)}</div><div class="ta-r">${fmtInt(poolN)}</div></div>`;
+        })
+        .join("");
+    }
+  }
+
+  function openNgsPoolModal(poolId, project) {
+    const modal = $("#ngsPoolModal");
+    const title = $("#ngsPoolModalTitle");
+    const body = $("#ngsPoolModalBody");
+    if (!modal || !title || !body) return;
+    title.textContent = `${poolId} · ${project} · 文库明细`;
+    const libs = ngsFlowSamples()
+      .filter((s) => s.project === project)
+      .filter((s) => s.ngsFlowStatus === "待杂交" || s.ngsFlowStatus === "待上机")
+      .filter((s) => `POOL-${s.project}-${(stableHash(s.barcode) % 3) + 1}` === poolId)
+      .slice(0, 24);
+    const batchId = libs[0] ? ngsSampleBatchId(libs[0]) : state.ngs.selectedBatchId;
+    state.ngs.activePoolBatchId = batchId || "";
+    state.ngs.activePoolId = poolId || "";
+    state.ngs.activePoolProject = project || "";
+    const st = getNgsQcControlAdded(batchId, project);
+    const qcHint = $("#ngsPoolQcHint");
+    if (qcHint) {
+      qcHint.textContent = `当前批次 ${batchId || "--"} · 项目 ${project || "--"} · 阳控：${st.pos ? "已增加" : "未增加"} · 阴控：${st.neg ? "已增加" : "未增加"}`;
+    }
+    const ctrlLibs = [];
+    if (st.pos) {
+      ctrlLibs.push({ libId: `${project}-PC`, barcode: "--", project, conc: "--", status: "阳控文库" });
+    }
+    if (st.neg) {
+      ctrlLibs.push({ libId: `${project}-NC`, barcode: "--", project, conc: "--", status: "阴控文库" });
+    }
+    body.innerHTML = [
+      ...ctrlLibs.map((x) => `<div class="table__row ngs-row-pool-lib"><div>${x.libId}</div><div>${x.barcode}</div><div>${x.project}</div><div>${x.conc}</div><div>${x.status}</div></div>`),
+      ...libs.map((s, i) => `<div class="table__row ngs-row-pool-lib"><div>LIB-${s.project}-${String(i + 1).padStart(3, "0")}</div><div>${s.barcode}</div><div>${s.project}</div><div>${fmtNum(Number(s.libPost), 2)} ng/µL</div><div>${s.ngsFlowStatus}</div></div>`),
+    ]
+      .join("");
+    modal.classList.add("is-open");
+    modal.setAttribute("aria-hidden", "false");
+  }
+
+  function closeNgsPoolModal() {
+    const modal = $("#ngsPoolModal");
+    if (!modal) return;
+    modal.classList.remove("is-open");
+    modal.setAttribute("aria-hidden", "true");
+    state.ngs.activePoolBatchId = "";
+    state.ngs.activePoolId = "";
+    state.ngs.activePoolProject = "";
+  }
+
+  function setNgsTab(tab) {
+    state.ngs.tab = tab;
+    applyNgsTabUI(tab);
+    if (tab === "monitor") renderNgsMonitor();
+    if (tab === "stats") renderNgsStats();
+  }
+
+  function nonNgsMethodForSample(s) {
+    if (!s) return "其他";
+    const src = `${s.project || ""}|${s.sampleType || ""}`;
+    const idx = stableHash(src) % NON_NGS_METHODS.length;
+    return NON_NGS_METHODS[idx] || "其他";
+  }
+
+  function mapNonNgsBizStatus(limsStatus) {
+    const st = String(limsStatus || "");
+    if (!st) return "待处理";
+    if (st.includes("已发布") || st.includes("已退单")) return "已完成";
+    if (st.includes("待") && (st.includes("上机") || st.includes("建库") || st.includes("杂交") || st.includes("提取"))) return "待处理";
+    if (st.includes("中") && (st.includes("实验") || st.includes("建库") || st.includes("杂交") || st.includes("测序") || st.includes("提取"))) return "执行中";
+    if (st.includes("生信分析") || st.includes("下机质控")) return "待判读";
+    if (st.includes("生信审核") || st.includes("报告审核")) return "待复核";
+    if (st.includes("异常处理")) return "待复检";
+    return "待处理";
+  }
+
+  function nonNgsCurrentStep(sample, method) {
+    const biz = mapNonNgsBizStatus(sample?.status);
+    if (biz === "待处理") return `${method}准备`;
+    if (biz === "执行中") return `${method}执行`;
+    if (biz === "待判读") return `${method}判读`;
+    if (biz === "待复核") return `${method}复核`;
+    if (biz === "待复检") return `${method}复检`;
+    return `${method}完成`;
+  }
+
+  function applyNonNgsTabUI(tab) {
+    const root = $("#view-lab-non-ngs");
+    if (!root) return;
+    $$(".nonngs-tab", root).forEach((b) => {
+      const on = b.getAttribute("data-nonngs-tab") === tab;
+      b.classList.toggle("is-active", on);
+      b.setAttribute("aria-selected", on ? "true" : "false");
+    });
+    $$(".nonngs-panel", root).forEach((p) => {
+      const on = p.getAttribute("data-nonngs-panel") === tab;
+      if (on) p.removeAttribute("hidden");
+      else p.setAttribute("hidden", "");
+      p.classList.toggle("is-active", on);
+    });
+  }
+
+  function renderNonNgsMonitor() {
+    const samples = (state.labAlpha.samples || [])
+      .filter((s) => s.status !== "已发布" && s.status !== "暂存中")
+      .map((s) => ({ ...s, nonNgsMethod: nonNgsMethodForSample(s) }));
+    const cards = NON_NGS_METHODS.map((method) => {
+      const list = samples.filter((s) => s.nonNgsMethod === method);
+      const pending = list.filter((s) => !String(s.status || "").includes("实验中")).length;
+      const running = list.filter((s) => String(s.status || "").includes("实验中")).length;
+      const avgTurnHours = list.length ? list.reduce((sum, s) => sum + (Number(s.stayHours) || 0), 0) / list.length : 0;
+      const abnormal = list.filter((s) => !!s.isAbnormal && s.status !== "已退单").length;
+      return { method, pending, running, avgTurnHours, abnormal };
+    });
+    const grid = $("#nonngsMonitorGrid");
+    if (grid) {
+      grid.innerHTML = cards
+        .map(
+          (x) => `
+            <div class="nonngs-method">
+              <div class="nonngs-method__head">
+                <div class="nonngs-method__title">${x.method}</div>
+                <div class="pill pill--muted">模块</div>
+              </div>
+              <div class="nonngs-method__grid">
+                <div class="nonngs-method__kpi"><div class="nonngs-method__label">待处理样本量</div><div class="nonngs-method__value">${fmtInt(x.pending)}</div></div>
+                <div class="nonngs-method__kpi"><div class="nonngs-method__label">实验中样本量</div><div class="nonngs-method__value">${fmtInt(x.running)}</div></div>
+                <div class="nonngs-method__kpi"><div class="nonngs-method__label">平均流转时长</div><div class="nonngs-method__value">${fmtNum(x.avgTurnHours, 1)} h</div></div>
+                <div class="nonngs-method__kpi"><div class="nonngs-method__label">异常样本数</div><div class="nonngs-method__value">${fmtInt(x.abnormal)}</div></div>
+              </div>
+            </div>
+          `
+        )
+        .join("");
+    }
+
+    const abnormalBody = $("#nonngsAbnormalTable");
+    if (abnormalBody) {
+      const rows = samples
+        .filter((s) => s.isAbnormal && s.status !== "已退单")
+        .sort((a, b) => Number(b.stayHours || 0) - Number(a.stayHours || 0))
+        .slice(0, 24);
+      abnormalBody.innerHTML = rows
+        .map(
+          (s) => `
+            <div class="table__row nonngs-row-abn">
+              <div>WO-${String(stableHash(s.id)).slice(0, 6)}</div>
+              <div>${s.barcode}</div>
+              <div>${s.nonNgsMethod}</div>
+              <div>${s.project}</div>
+              <div>${s.status}</div>
+              <div>${mapNonNgsBizStatus(s.status)}</div>
+              <div>${nonNgsCurrentStep(s, s.nonNgsMethod)}</div>
+              <div>${s.owner || "--"}</div>
+              <div>${fmtHours(s.stayHours)}</div>
+              <div>${stableHash(s.id) % 5 === 0 ? "是" : "否"}</div>
+              <div>${s.isAbnormal ? "是" : "否"}</div>
+              <div>${s.alertLevel || "低"}</div>
+            </div>
+          `
+        )
+        .join("");
+    }
+  }
+
+  function buildNonNgsStatItems(seedBase, genVal) {
+    return NON_NGS_METHODS.map((method, i) => {
+      const rnd = seededRand(seedBase + i * 127);
+      const n = 16 + Math.floor(rnd() * 18);
+      const values = Array.from({ length: n }, () => genVal(rnd, method));
+      return { label: method, values };
+    });
+  }
+
+  function renderNonNgsStats() {
+    if (!state.nonNgs.statsMonth) state.nonNgs.statsMonth = currentMonthYM();
+    const monthInput = $("#nonngsStatsMonthInput");
+    if (monthInput && monthInput.value !== state.nonNgs.statsMonth) monthInput.value = state.nonNgs.statsMonth;
+    setText("nonngsStatsMeta", `按月份 ${state.nonNgs.statsMonth} 统计`);
+    const seed = Number(String(state.nonNgs.statsMonth || "").replaceAll("-", "")) || 202603;
+    const tatItems = buildNonNgsStatItems(seed + 101, (r) => clamp(20 + Math.abs(normalRand(r)) * 14, 4, 96));
+    const volItems = buildNonNgsStatItems(seed + 202, (r) => clamp(18 + Math.abs(normalRand(r)) * 11, 3, 92));
+    const cancelRateItems = buildNonNgsStatItems(seed + 303, (r) => clamp(1.2 + Math.abs(normalRand(r)) * 2.1, 0.1, 16));
+    const tatCanvas = $("#nonngsCanvasTat");
+    if (tatCanvas) drawCategoryBoxWithOutliers(tatCanvas, tatItems, { yFmt: (v) => `${fmtNum(v, 1)} h` });
+    const volCanvas = $("#nonngsCanvasVolume");
+    if (volCanvas) drawCategoryBoxWithOutliers(volCanvas, volItems, { yFmt: (v) => fmtNum(v, 0) });
+    const cancelRateCanvas = $("#nonngsCanvasCancelRate");
+    if (cancelRateCanvas) drawCategoryBoxWithOutliers(cancelRateCanvas, cancelRateItems, { yFmt: (v) => `${fmtNum(v, 1)}%` });
+
+    const samples = (state.labAlpha.samples || []).map((s) => ({ ...s, nonNgsMethod: nonNgsMethodForSample(s) }));
+    const canceled = samples.filter((s) => s.status === "已退单");
+    const rnd = seededRand(seed + 404);
+    const cancelRows =
+      canceled.length > 0
+        ? canceled.slice(0, 16)
+        : Array.from({ length: 10 }, (_, i) => ({
+            id: `CN_${9300 + i}`,
+            barcode: `CN${9300 + i}`,
+            nonNgsMethod: NON_NGS_METHODS[i % NON_NGS_METHODS.length],
+            project: PROJECTS[i % PROJECTS.length],
+            sampleType: EXT_SAMPLE_TYPES[i % EXT_SAMPLE_TYPES.length],
+            status: "已退单",
+          }));
+    const cancelBody = $("#nonngsCancelTable");
+    if (cancelBody) {
+      cancelBody.innerHTML = cancelRows
+        .map(
+          (s) => `
+            <div class="table__row nonngs-row-cancel">
+              <div>WO-${String(stableHash(s.id || s.barcode)).slice(0, 6)}</div>
+              <div>${s.barcode}</div>
+              <div>${s.nonNgsMethod || nonNgsMethodForSample(s)}</div>
+              <div>${s.project}</div>
+              <div>${s.sampleType || "--"}</div>
+              <div>${s.status || "已退单"}</div>
+              <div>${mapNonNgsBizStatus(s.status || "已退单")}</div>
+              <div>${NON_NGS_CANCEL_REASONS[Math.floor(rnd() * NON_NGS_CANCEL_REASONS.length)]}</div>
+            </div>
+          `
+        )
+        .join("");
+    }
+  }
+
+  function setNonNgsTab(tab) {
+    state.nonNgs.tab = tab;
+    applyNonNgsTabUI(tab);
+    if (tab === "monitor") renderNonNgsMonitor();
+    if (tab === "stats") renderNonNgsStats();
+  }
+
+  function renderNonNgsCenter() {
+    const root = $("#view-lab-non-ngs");
+    if (!root || !root.classList.contains("is-active")) return;
+    if (!state.labAlpha.samples.length) initLabAlphaSim();
+    applyNonNgsTabUI(state.nonNgs.tab || "monitor");
+    if ((state.nonNgs.tab || "monitor") === "monitor") renderNonNgsMonitor();
+    else renderNonNgsStats();
+  }
+
   function renderLabAlpha() {
-    const root = $("#view-lab-alpha");
+    const root = $("#view-lab-ngs");
+    if (!root || !root.classList.contains("is-active")) return;
+    if (!state.labAlpha.samples.length) initLabAlphaSim();
+    applyNgsTabUI(state.ngs.tab || "monitor");
+    if ((state.ngs.tab || "monitor") === "monitor") renderNgsMonitor();
+    else renderNgsStats();
+  }
+
+  function renderSampleCenter() {
+    const root = $("#view-sample-center");
     if (!root) return;
     if (!state.labAlpha.samples.length) {
       initLabAlphaSim();
     }
-    renderLabOverview();
-    renderLabStatusTable();
-    renderLabAbnormalTable();
+    syncLabFilterInputsFromState();
+    renderSampleCenterOverview();
+    renderSampleCenterStatusTable();
+    renderSampleCenterAbnormalTable();
+  }
+
+  function taskStatusText(status) {
+    if (status === TASK_STATUSES.todo) return "待分配";
+    if (status === TASK_STATUSES.doing) return "处理中";
+    if (status === TASK_STATUSES.done) return "已完成";
+    return "--";
+  }
+
+  function fmtTs(ts) {
+    if (!Number.isFinite(Number(ts))) return "--";
+    const d = new Date(Number(ts));
+    // 只展示到分钟，避免视觉过长
+    return d.toLocaleString("zh-CN", { hour12: false, month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+  }
+
+  const TASK_DESCRIPTION_POOL = [
+    "下机数据量不足，质控不合格",
+    "提取浓度低",
+    "阴控失控",
+    "拆分无数据",
+  ];
+
+  function stableHash(str) {
+    const s = String(str || "");
+    let h = 2166136261;
+    for (let i = 0; i < s.length; i++) {
+      h ^= s.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    return h >>> 0;
+  }
+
+  function taskDescriptionForSample(sample, stageKey) {
+    const seedStr = sample?.id || sample?.barcode || stageKey || "";
+    const idx = stableHash(seedStr) % TASK_DESCRIPTION_POOL.length;
+    return TASK_DESCRIPTION_POOL[idx];
+  }
+
+  function renderAbnormalCenter() {
+    const root = $("#view-abnormal-center");
+    if (!root) return;
+
+    const listRoot = $("#taskList");
+    const metaRoot = $("#tasksMeta");
+    if (!listRoot || !metaRoot) return;
+
+    const filterStatus = state.tasksUI.filterStatus || "";
+    const filterStageKey = state.tasksUI.filterStageKey || "";
+    const filterAssigneeNeedle = (state.tasksUI.filterAssignee || "").trim().toLowerCase();
+
+    const tasksWithSample = (state.tasks || [])
+      .map((t) => {
+        const sample = getLabSampleById(t.sourceSampleId);
+        return { t, sample };
+      })
+      .filter((x) => !!x.sample);
+
+    const filtered = tasksWithSample.filter(({ t, sample }) => {
+      if (filterStatus && t.status !== filterStatus) return false;
+      const stageKey = t.stageKey || stageKeyFromLabStatus(sample.status);
+      if (filterStageKey && stageKey !== filterStageKey) return false;
+      if (filterAssigneeNeedle) {
+        const a = String(t.assignee || "").toLowerCase();
+        if (!a.includes(filterAssigneeNeedle)) return false;
+      }
+      return true;
+    });
+
+    const todoCount = filtered.filter((x) => x.t.status === TASK_STATUSES.todo).length;
+    const doingCount = filtered.filter((x) => x.t.status === TASK_STATUSES.doing).length;
+    const doneCount = filtered.filter((x) => x.t.status === TASK_STATUSES.done).length;
+
+    metaRoot.textContent = `共 ${fmtInt(filtered.length)} 条 · 待分配 ${fmtInt(todoCount)} · 处理中 ${fmtInt(doingCount)} · 已完成 ${fmtInt(doneCount)}`;
+
+    const rows = filtered
+      .slice()
+      .sort((a, b) => (b.t.createdAt || 0) - (a.t.createdAt || 0))
+      .map(({ t, sample }) => {
+        const stageKey = t.stageKey || stageKeyFromLabStatus(sample.status);
+        const priority = t.priority || sample.alertLevel || "低";
+        const taskDesc = t.description || taskDescriptionForSample(sample, stageKey);
+        const remaining = sample.remainingHours != null ? fmtHours(sample.remainingHours) : "--";
+        return `
+          <div class="table__row task-row">
+            <div>${t.id}</div>
+            <div>${sample.barcode}</div>
+            <div>${priority}</div>
+            <div>${taskDesc}</div>
+            <div>${taskStatusText(t.status)}</div>
+            <div>${t.assignee || sample.owner || "--"}</div>
+            <div>${fmtTs(t.createdAt)}</div>
+            <div>${remaining}</div>
+            <div>
+              <button type="button" class="btn btn--ghost task-open-btn" data-task-id="${t.id}">详情</button>
+            </div>
+          </div>
+        `;
+      })
+      .join("");
+
+    listRoot.innerHTML = rows || `<div class="muted" style="padding: 10px 0;">暂无符合条件的任务</div>`;
+  }
+
+  function renderTaskDetail(taskId) {
+    const task = getTaskById(taskId);
+    const body = $("#taskDetailBody");
+    if (!task || !body) return;
+
+    const sample = getLabSampleById(task.sourceSampleId);
+    const actorDefault = task.assignee || sample?.owner || "系统";
+    const history = (task.history || []).slice(-10).reverse();
+    const comments = (task.comments || []).slice(-8).reverse();
+
+    const actionButtons = (() => {
+      // 升级版演示口径：仅保留三态闭环
+      const cancelBtn = `<button type="button" class="btn btn--ghost task-cancel-order-btn" data-task-id="${task.id}">退单</button>`;
+      if (task.status === TASK_STATUSES.todo) {
+        return `<button type="button" class="btn task-action-btn" data-task-action="${TASK_STATUSES.doing}" data-task-id="${task.id}">开始处理</button>${cancelBtn}`;
+      }
+      if (task.status === TASK_STATUSES.doing) {
+        return `
+          <button type="button" class="btn btn--ghost task-action-btn" data-task-action="${TASK_STATUSES.doing}" data-task-kind="handoff" data-task-id="${task.id}">继续流转</button>
+          <button type="button" class="btn task-action-btn" data-task-action="${TASK_STATUSES.done}" data-task-id="${task.id}">完成（解决）</button>
+          ${cancelBtn}
+        `;
+      }
+      return `<div class="pill pill--muted" style="margin-right: 8px;">当前状态：${taskStatusText(task.status)}</div>`;
+    })();
+
+    body.innerHTML = `
+      <div class="grid grid--two">
+        <div class="card" style="box-shadow:none; border-color: rgba(255,255,255,0.08);">
+          <div class="card__head">
+            <div class="card__title">任务信息</div>
+          </div>
+          <div class="card__body">
+            <div class="qc-h">任务ID：${task.id}</div>
+            <div class="qc-h">状态：${taskStatusText(task.status)}</div>
+            <div class="qc-h">环节：${task.stageKey || "--"}</div>
+            <div class="qc-h">优先级：${task.priority || "--"}</div>
+            <div class="qc-h">当前处理人：${actorDefault}</div>
+            <div class="qr-note">创建时间：${fmtTs(task.createdAt)}</div>
+          </div>
+        </div>
+        <div class="card" style="box-shadow:none; border-color: rgba(255,255,255,0.08);">
+          <div class="card__head">
+            <div class="card__title">关联样本</div>
+          </div>
+          <div class="card__body">
+            <div class="qc-h">条码：${sample?.barcode || "--"}</div>
+            <div class="qc-h">检测编号：${sample?.detectNo || "--"}</div>
+            <div class="qc-h">批次号：${sample?.batchNo || "--"}</div>
+            <div class="qc-h">诊断：${sample?.diagnosis || "--"}</div>
+            <div class="qc-h">样本状态：${sample?.status || "--"}</div>
+            <div class="qc-h">告警级别：${sample?.alertLevel || "--"}</div>
+            <div class="qr-note">剩余周期：${sample?.remainingHours != null ? fmtHours(sample.remainingHours) : "--"}</div>
+            <div class="qr-note">备注：${sample?.remark || "--"}</div>
+          </div>
+        </div>
+      </div>
+
+      <div style="height: 14px;"></div>
+
+      <div class="card" style="box-shadow:none; border-color: rgba(255,255,255,0.08);">
+        <div class="card__head">
+          <div class="card__title">处理操作</div>
+        </div>
+        <div class="card__body">
+          <div class="field field--inline">
+            <div class="field__label">处理人</div>
+            <input class="lab-input" id="taskActorInput" value="${actorDefault}" />
+          </div>
+          <div class="field">
+            <div class="field__label">评论（留痕）</div>
+            <textarea class="lab-input" id="taskCommentText" rows="3" placeholder="输入处理意见/原因..."></textarea>
+          </div>
+          <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-top: 10px;">
+            ${actionButtons}
+            <button type="button" class="btn btn--ghost task-comment-add-btn" data-task-id="${task.id}" id="taskCommentAddBtn">添加评论</button>
+          </div>
+        </div>
+      </div>
+
+      <div style="height: 14px;"></div>
+
+      <div class="card" style="box-shadow:none; border-color: rgba(255,255,255,0.08);">
+        <div class="card__head">
+          <div class="card__title">处理留痕与评论记录（最近）</div>
+        </div>
+        <div class="card__body">
+          <div class="qr-note">评论记录：</div>
+          <div style="max-height: 180px; overflow:auto; padding-right: 8px;">
+            ${
+              comments.length
+                ? comments
+                    .map(
+                      (c) => `<div style="padding: 8px 10px; border: 1px solid rgba(255,255,255,0.08); border-radius: 12px; margin-bottom: 8px;">
+                        <div style="display:flex; justify-content:space-between; gap:10px; margin-bottom: 4px;">
+                          <div><b>${c.author || "系统"}</b></div>
+                          <div style="color: rgba(255,255,255,0.62); font-size: 12px;">${fmtTs(c.createdAt)}</div>
+                        </div>
+                        <div style="color: rgba(255,255,255,0.9);">${c.content || ""}</div>
+                      </div>`
+                    )
+                    .join("")
+                : `<div style="color: rgba(255,255,255,0.6); padding: 6px 2px;">暂无评论</div>`
+            }
+          </div>
+
+          <div style="height: 12px;"></div>
+
+          <div class="table table--wide">
+            <div class="table__row table__row--head">
+              <div>时间</div>
+              <div>状态</div>
+              <div>操作人</div>
+              <div>备注</div>
+            </div>
+            ${(history.length
+              ? history
+                  .map((h) => `<div class="table__row">
+                    <div>${fmtTs(h.createdAt)}</div>
+                    <div>${taskStatusText(h.status)}</div>
+                    <div>${h.actor || "--"}</div>
+                    <div>${h.note || "--"}</div>
+                  </div>`)
+                  .join("")
+              : `<div class="table__row"><div colspan="4" style="grid-column: span 4;">暂无历史留痕</div></div>`)}
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function openTaskDetailModal(taskId) {
+    const modal = $("#taskDetailModal");
+    if (!modal) return;
+    state.tasksUI.selectedTaskId = taskId;
+    renderTaskDetail(taskId);
+    modal.classList.add("is-open");
+    modal.setAttribute("aria-hidden", "false");
+  }
+
+  function closeTaskDetailModal() {
+    const modal = $("#taskDetailModal");
+    if (modal) {
+      modal.classList.remove("is-open");
+      modal.setAttribute("aria-hidden", "true");
+    }
+    state.tasksUI.selectedTaskId = null;
   }
 
   function renderProductivityStatsView() {
@@ -1310,39 +3199,78 @@
         drawMonthlyBoxWithOutliers(canvas, monthlyData);
       }
     });
+
+    if (!state.productivity.statsAbnTaskMonth && list.length) {
+      state.productivity.statsAbnTaskMonth = list[list.length - 1].month;
+    }
+    const abnTaskMonth = state.productivity.statsAbnTaskMonth;
+    const abnTaskMonthChips = $("#peStatsAbnTaskMonthChips");
+    if (abnTaskMonthChips) {
+      abnTaskMonthChips.innerHTML = list.map(
+        ({ month }) => `
+        <label class="chip ${abnTaskMonth === month ? "is-active" : ""}">
+          <input type="radio" name="peStatsAbnTaskMonth" value="${month}" ${abnTaskMonth === month ? "checked" : ""}/>
+          <span>${month}</span>
+        </label>`
+      ).join("");
+    }
+    const abnTaskCanvas = $("#peStatsAbnTaskCanvas");
+    if (abnTaskCanvas && abnTaskMonth) {
+      const monthRow = list.find((x) => x.month === abnTaskMonth);
+      const byPerson = monthRow?.data?.abnormalTaskHandleHours || {};
+      const items = ABNORMAL_TASK_PEOPLE.map((name) => ({
+        label: name,
+        values: byPerson[name] || [],
+      }));
+      drawCategoryBoxWithOutliers(abnTaskCanvas, items, {
+        yFmt: (v) => fmtNum(v, 1),
+        labelFmt: shortPersonLabelForStats,
+        rotateLabels: true,
+      });
+    }
   }
 
   function buildAlerts() {
     const alerts = [];
+    const abnormalByStage = getAbnormalCountByStage();
+    const abnormalTotal = getAbnormalCount();
     const stageRank = ["rep", "bio", "ana", "exp"];
     stageRank.forEach((k) => {
       const s = STAGES.find((x) => x.key === k);
       const f = state.flow[k];
+      const abnInStage = abnormalByStage[k] ?? 0;
+      // 闭环逻辑：只有当该环节确实存在异常样本时，SLA 告警才可见。
+      if (abnInStage <= 0) return;
       const lvl = riskLevel(s, f.avgMin, f.p95Min);
       if (lvl === "ok") return;
       const over = Math.max(0, Math.round(f.p95Min - s.slaMin));
       alerts.push({
         stage: s.name,
+        stageKey: k,
         level: lvl,
         title: `${s.name}环节 SLA 风险`,
-        sub: `P95 滞留 ${fmtMin(f.p95Min)}，相对 SLA ${s.slaMin} 分钟${over ? `（超出约 ${over} 分钟）` : ""}`,
+        sub: `P95 滞留 ${fmtMin(f.p95Min)}，异常样本 ${fmtInt(abnInStage)}，相对 SLA ${s.slaMin} 分钟${
+          over ? `（超出约 ${over} 分钟）` : ""
+        }`,
       });
     });
 
     // Add abnormal alert
-    if (state.kpi.abnormal >= 18) {
+    if (abnormalTotal >= 18) {
       alerts.unshift({
         stage: "质量控制",
+        stageKey: "",
         level: "bad",
         title: "异常样本上升",
-        sub: `当前异常样本 ${fmtInt(state.kpi.abnormal)}，建议优先排查 Top 原因并复核关键样本。`,
+        sub: `当前异常样本 ${fmtInt(abnormalTotal)}，建议优先排查 Top 原因并复核关键样本。`,
       });
-    } else if (state.kpi.abnormal >= 12) {
+    } else if (abnormalTotal >= 12) {
       alerts.unshift({
         stage: "质量控制",
+        stageKey: "",
         level: "warn",
         title: "异常样本偏高",
-        sub: `当前异常样本 ${fmtInt(state.kpi.abnormal)}，建议关注测序/比对指标分布与退回原因。`,
+        sub: `当前异常样本 ${fmtInt(abnormalTotal)}，建议关注测序/比对指标分布与退回原因。`,
       });
     }
 
@@ -1359,12 +3287,8 @@
     const incPub = rnd() < 0.40 ? 1 : 0;
     state.kpi.publishedToday += incPub;
 
-    // Abnormal fluctuates slightly
-    state.kpi.abnormal = clamp(
-      state.kpi.abnormal + (rnd() < 0.25 ? 1 : rnd() < 0.50 ? -1 : 0),
-      2,
-      28
-    );
+    // 异常数量由样本闭环状态实时决定，避免随机漂移覆盖回填结果
+    state.kpi.abnormal = getAbnormalCount();
 
     // Flow counts shift
     const shift = (from, to, max) => {
@@ -1696,7 +3620,7 @@
     setText("kpiTotal", fmtInt(state.kpi.totalToday));
     setText("kpiRunning", fmtInt(state.kpi.running));
     setText("kpiPublished", fmtInt(state.kpi.publishedToday));
-    setText("kpiAbnormal", fmtInt(state.kpi.abnormal));
+    setText("kpiAbnormal", fmtInt(getAbnormalCount()));
 
     const trendEl = $("#kpiTotalTrend");
     const last = state.lastTotal ?? state.kpi.totalToday;
@@ -1761,6 +3685,8 @@
   }
 
   function renderAlerts() {
+    // 告警必须随“样本异常闭环”实时刷新，避免随机状态漂移覆盖处理结果
+    state.alerts = buildAlerts();
     const root = $("#alerts");
     const items = state.alerts.length ? state.alerts : [{
       level: "ok",
@@ -1771,7 +3697,7 @@
       const tagCls = a.level === "bad" ? "alert__tag--bad" : a.level === "warn" ? "alert__tag--warn" : "";
       const tagText = a.level === "bad" ? "高风险" : a.level === "warn" ? "中风险" : "正常";
       return `
-        <div class="alert">
+        <div class="alert" data-alert-stage-key="${a.stageKey ?? ""}">
           <div>
             <div class="alert__title">${a.title}</div>
             <div class="alert__sub">${a.sub}</div>
@@ -1794,7 +3720,7 @@
     const items = [
       { label: "在制样本", value: fmtInt(state.kpi.running), hint: "实验→报告审核在途合计" },
       { label: "已发布", value: fmtInt(state.kpi.publishedToday), hint: "今日累计发布" },
-      { label: "异常样本", value: fmtInt(state.kpi.abnormal), hint: "需复核/退回/补充" },
+      { label: "异常样本", value: fmtInt(getAbnormalCount()), hint: "需复核/退回/补充" },
       { label: "瓶颈候选", value: riskStages[0] ?? "—", hint: riskStages.length ? `风险环节：${riskStages.join("、")}` : "暂无明显 SLA 风险" },
       { label: "实验中滞留", value: fmtInt(exp), hint: `平均滞留 ${fmtMin(state.flow.exp.avgMin)}` },
       { label: "报告审核滞留", value: fmtInt(rep), hint: `P95 滞留 ${fmtMin(state.flow.rep.p95Min)}` },
@@ -1916,8 +3842,156 @@
     return state.qcSeq.batches.find((b) => b.id === id) ?? state.qcSeq.batches[0] ?? null;
   }
 
+  function rebuildQcLabMapping() {
+    const map = new Map();
+    const labsByProj = {};
+    PROJECTS.forEach((p) => {
+      labsByProj[p] = (state.labAlpha.samples || []).filter((s) => s.project === p).sort((a, b) => a.id.localeCompare(b.id));
+    });
+    const idx = {};
+    PROJECTS.forEach((p) => {
+      idx[p] = 0;
+    });
+    (state.qcSeq.batches || []).forEach((batch) => {
+      batch.samples.forEach((qs) => {
+        const p = qs.project;
+        const list = labsByProj[p];
+        if (!list || !list.length) return;
+        const i = idx[p] % list.length;
+        map.set(qs.id, list[i].id);
+        idx[p] += 1;
+      });
+    });
+    state.qcSeq.qcToLabId = map;
+  }
+
+  function getLabIdsForHeatKey(batch, heatKey) {
+    if (!batch || !heatKey) return [];
+    const keyOf = (i7, i5) => `${i7}__${i5}`;
+    const labs = new Set();
+    batch.samples.forEach((qs) => {
+      if (keyOf(qs.i7, qs.i5) !== heatKey) return;
+      const lid = state.qcSeq.qcToLabId.get(qs.id);
+      if (lid) labs.add(lid);
+    });
+    return Array.from(labs);
+  }
+
+  function getLabIdsForProjectInBatch(batch, project) {
+    if (!batch || !project) return [];
+    const labs = new Set();
+    batch.samples
+      .filter((s) => s.project === project)
+      .forEach((qs) => {
+        const lid = state.qcSeq.qcToLabId.get(qs.id);
+        if (lid) labs.add(lid);
+      });
+    return Array.from(labs);
+  }
+
+  function applyQcExceptionToLabs(labIds, taskTitle, detail, assigneeName) {
+    if (!Array.isArray(labIds) || !labIds.length) return false;
+    const note = String(detail || "").trim();
+    const assignee = String(assigneeName || "").trim() || TASK_ASSIGNEE_OPTIONS[0];
+    const now = Date.now();
+    let touched = false;
+    labIds.forEach((lid) => {
+      const lab = getLabSampleById(lid);
+      if (!lab) return;
+      if (lab.status !== "异常处理中") {
+        lab.statusBeforeException = lab.status;
+      }
+      lab.resumeStatusAfterException = "生信审核中";
+      lab.status = "异常处理中";
+      lab.isAbnormal = true;
+      lab.alertLevel = "高";
+      lab.remark = note || lab.remark || "质控异常待处理";
+      lab.slaHours = Number.isFinite(lab.slaHours) && lab.slaHours > 0 ? lab.slaHours : 48;
+      lab.remainingHours = Math.max(1, Math.min(Number(lab.remainingHours) || 4, lab.slaHours));
+      lab.stayHours = Math.max(1, Math.round(lab.slaHours - lab.remainingHours));
+      lab.owner = assignee;
+      touched = true;
+    });
+    if (!touched) return false;
+    applySlaAutoCapture();
+    syncTasksWithAbnormalSamples();
+    labIds.forEach((lid) => {
+      const lab = getLabSampleById(lid);
+      if (!lab) return;
+      const taskId = taskIdForSample(lid);
+      const task = getTaskById(taskId);
+      if (!task) return;
+      task.qcOrigin = true;
+      task.qcBaseDescription = taskTitle;
+      task.assignee = assignee;
+      task.status = TASK_STATUSES.doing;
+      task.completedAt = null;
+      appendTaskHistory(taskId, {
+        status: TASK_STATUSES.doing,
+        actor: "质控中心",
+        note: `创建工单：${taskTitle}；指派 ${assignee}，进入处理中${note ? `（${note}）` : ""}`,
+        createdAt: now,
+      });
+      if (note) addTaskComment(taskId, "质控中心", note);
+    });
+    refreshAbnormalTaskDescriptions();
+    saveTasksToStorage();
+    return true;
+  }
+
+  function openQcPushExceptionModal(payload) {
+    const modal = $("#qcPushExceptionModal");
+    const titleEl = $("#qcPushExceptionModalTitle");
+    const subEl = $("#qcPushExceptionModalSub");
+    const ta = $("#qcPushExceptionText");
+    const asg = $("#qcPushAssignee");
+    if (!modal || !titleEl || !subEl || !ta) return;
+    state.qcSeq.qcPushPending = {
+      taskTitle: payload.taskTitle,
+      labIds: payload.labIds || [],
+      subtitle: payload.subtitle || "",
+    };
+    titleEl.textContent = payload.taskTitle;
+    subEl.textContent = payload.subtitle || "—";
+    ta.value = "";
+    if (asg) {
+      asg.innerHTML = TASK_ASSIGNEE_OPTIONS.map((n) => `<option value="${n}">${n}</option>`).join("");
+      asg.value = TASK_ASSIGNEE_OPTIONS[0];
+    }
+    modal.classList.add("is-open");
+    modal.setAttribute("aria-hidden", "false");
+  }
+
+  function closeQcPushExceptionModal() {
+    const modal = $("#qcPushExceptionModal");
+    if (modal) {
+      modal.classList.remove("is-open");
+      modal.setAttribute("aria-hidden", "true");
+    }
+    state.qcSeq.qcPushPending = { taskTitle: "", labIds: [], subtitle: "" };
+  }
+
+  function confirmQcPushExceptionFromModal() {
+    const ta = $("#qcPushExceptionText");
+    const asg = $("#qcPushAssignee");
+    const detail = ta ? String(ta.value || "").trim() : "";
+    const assignee = asg ? String(asg.value || "").trim() : "";
+    const { taskTitle, labIds } = state.qcSeq.qcPushPending;
+    if (!taskTitle || !labIds.length) {
+      closeQcPushExceptionModal();
+      return;
+    }
+    const ok = applyQcExceptionToLabs(labIds, taskTitle, detail, assignee);
+    closeQcPushExceptionModal();
+    if (!ok) {
+      window.alert("未能关联到实验室样本，请确认项目与映射数据。");
+      return;
+    }
+    renderAll();
+  }
+
   function renderQcSeq() {
-    const root = $("#view-qc-seq");
+    const root = $("#view-qc-center");
     if (!root) return;
 
     const batches = state.qcSeq.batches;
@@ -2019,6 +4093,9 @@
         }
         const bg = c.abnormal ? "rgba(255,92,122,0.55)" : colorFor(c.yieldGb);
         const bad = c.abnormal ? "hm-cell--bad" : "";
+        const heatKey = keyOf(i7, i5);
+        const sel = state.qcSeq.selectedHeatKey === heatKey && c.abnormal ? " hm-cell--selected" : "";
+        const dataHeat = c.abnormal ? ` data-heat-key="${heatKey}"` : "";
         const projTxt = Array.from(c.projects).join("、");
         const tip = `
           <div class="hm-tooltip">
@@ -2029,7 +4106,7 @@
           </div>
         `;
         parts.push(
-          `<div class="hm-cell hm-cell--data ${bad}" style="background:${bg}">
+          `<div class="hm-cell hm-cell--data ${bad}${sel}" style="background:${bg}"${dataHeat}>
             ${fmtNum(c.yieldGb, 1)}
             ${tip}
           </div>`
@@ -2038,27 +4115,97 @@
     });
     hm.innerHTML = parts.join("");
 
+    hm.onclick = (e) => {
+      const cell = e.target && e.target.closest ? e.target.closest(".hm-cell--data.hm-cell--bad") : null;
+      if (!cell || !hm.contains(cell)) return;
+      const key = cell.getAttribute("data-heat-key");
+      if (!key) return;
+      state.qcSeq.selectedHeatKey = key;
+      renderQcSeq();
+    };
+
+    const heatSelEl = $("#qcHeatSelection");
+    if (heatSelEl) {
+      if (state.qcSeq.selectedHeatKey) {
+        const partsK = state.qcSeq.selectedHeatKey.split("__");
+        heatSelEl.textContent = `已选：${partsK[0] || ""} × ${partsK[1] || ""}（异常）`;
+      } else {
+        heatSelEl.textContent = "点击红色单元格选择";
+      }
+    }
+    const btnHeat = $("#qcBtnPushHeat");
+    if (btnHeat) {
+      btnHeat.disabled = !state.qcSeq.selectedHeatKey;
+      btnHeat.onclick = () => {
+        if (!state.qcSeq.selectedHeatKey) return;
+        const labIds = getLabIdsForHeatKey(batch, state.qcSeq.selectedHeatKey);
+        if (!labIds.length) {
+          window.alert("未关联到实验室中心样本（原型映射），请使用「重置模拟」后重试。");
+          return;
+        }
+        const hk = state.qcSeq.selectedHeatKey.split("__");
+        openQcPushExceptionModal({
+          taskTitle: "数据产出量异常",
+          labIds,
+          subtitle: `批次 ${batch.date} · ${batch.runName} · Index ${hk[0] || ""} × ${hk[1] || ""} · 关联样本 ${labIds.length} 个`,
+        });
+      };
+    }
+
     // Controls
     const controlsRoot = $("#qcControls");
     controlsRoot.innerHTML = PROJECTS.map((p) => {
+      const ctrlAdded = getNgsQcControlAdded(batch.id, p);
       const ctrl = batch.controls[p];
       const pos = ctrl?.pos;
       const neg = ctrl?.neg;
       const posCls = pos?.ok ? "badge--ok" : "badge--bad";
       const negCls = neg?.ok ? "badge--ok" : "badge--bad";
+      const ooc = !!(pos && !pos.ok) || !!(neg && !neg.ok);
       return `
         <div class="qc-control">
           <div>
             <div class="qc-control__proj">${p}</div>
             <div class="qc-control__meta">该批次质控品结果汇总</div>
           </div>
-          <div class="qc-pair">
-            <span class="badge ${pos ? posCls : "badge--muted"}">阳控：${pos ? (pos.ok ? "在控" : "失控") : "—"} · ${pos ? fmtNum(pos.value, 3) : "--"}</span>
-            <span class="badge ${neg ? negCls : "badge--muted"}">阴控：${neg ? (neg.ok ? "在控" : "失控") : "—"} · ${neg ? fmtNum(neg.value, 3) : "--"}</span>
+          <div class="qc-control__right">
+            <div class="qc-pair">
+              <span class="badge ${ctrlAdded.pos && pos ? posCls : "badge--muted"}">${
+                ctrlAdded.pos
+                  ? `阳控：${pos ? (pos.ok ? "在控" : "失控") : "—"} · ${pos ? fmtNum(pos.value, 3) : "--"}`
+                  : "该批次未上阳控"
+              }</span>
+              <span class="badge ${ctrlAdded.neg && neg ? negCls : "badge--muted"}">${
+                ctrlAdded.neg
+                  ? `阴控：${neg ? (neg.ok ? "在控" : "失控") : "—"} · ${neg ? fmtNum(neg.value, 3) : "--"}`
+                  : "该批次未上阴控"
+              }</span>
+            </div>
+            ${
+              ooc && ctrlAdded.pos && ctrlAdded.neg
+                ? `<button type="button" class="btn btn--ghost qc-btn-push-ooc" data-qc-proj="${p}">推送异常</button>`
+                : ""
+            }
           </div>
         </div>
       `;
     }).join("");
+
+    $$(".qc-btn-push-ooc", controlsRoot).forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const proj = btn.getAttribute("data-qc-proj");
+        const labIds = getLabIdsForProjectInBatch(batch, proj);
+        if (!labIds.length) {
+          window.alert("未关联到实验室中心样本（原型映射），请使用「重置模拟」后重试。");
+          return;
+        }
+        openQcPushExceptionModal({
+          taskTitle: "质控品失控",
+          labIds,
+          subtitle: `批次 ${batch.date} · 项目 ${proj} · 该批次内该项目样本 ${labIds.length} 个`,
+        });
+      });
+    });
 
     // Metric chips (single-select)
     const chipRoot = $("#qcMetricChips");
@@ -2202,6 +4349,24 @@
         `;
       }).join("");
     }
+
+    const btnSamplePush = $("#qcBtnPushSampleDetail");
+    if (btnSamplePush) {
+      btnSamplePush.onclick = () => {
+        const sid = state.qcSeq.selectedSampleId;
+        if (!sid) return;
+        const labId = state.qcSeq.qcToLabId.get(sid);
+        if (!labId) {
+          window.alert("未关联到实验室中心样本（原型映射），请使用「重置模拟」后重试。");
+          return;
+        }
+        openQcPushExceptionModal({
+          taskTitle: "下机质控不通过",
+          labIds: [labId],
+          subtitle: `批次 ${batch.date} · 测序样本 ${sid}`,
+        });
+      };
+    }
   }
 
   function getQcResult() {
@@ -2220,7 +4385,7 @@
   function renderQcResult(opts) {
     opts = opts || {};
     const skipMonthly = opts.skipMonthly === true;
-    const root = $("#view-qc-result");
+    const root = $("#view-result-center");
     if (!root) return;
     const batches = state.qcSeq.batches;
     if (!batches.length) return;
@@ -2964,22 +5129,25 @@
     });
   }
 
-  function drawMonthlyBoxWithOutliers(canvas, monthlyData, opts) {
+  /** items: { label, values }[] — 箱型图 + Tukey 离群值红点 */
+  function drawCategoryBoxWithOutliers(canvas, items, opts) {
     opts = opts || {};
     const yFmt = opts.yFmt || ((v) => fmtNum(v, 0));
+    const labelFmt = opts.labelFmt || ((l) => String(l));
+    const rotateLabels = !!opts.rotateLabels;
+    const padB = typeof opts.padB === "number" ? opts.padB : rotateLabels ? 56 : 32;
     const ctx = canvas.getContext("2d");
     const w = canvas.width;
     const h = canvas.height;
     const padL = 44;
     const padR = 12;
     const padT = 18;
-    const padB = 32;
     const innerW = w - padL - padR;
     const innerH = h - padT - padB;
     ctx.clearRect(0, 0, w, h);
-    if (!monthlyData || !monthlyData.length) return;
+    if (!items || !items.length) return;
 
-    const allVals = monthlyData.flatMap((m) => m.values || []);
+    const allVals = items.flatMap((m) => m.values || []);
     const globalMin = allVals.length ? Math.min(...allVals, 0) : 0;
     const globalMax = allVals.length ? Math.max(...allVals, 1) : 1;
     const scale = { min: globalMin, max: globalMax, digits: 0 };
@@ -2987,9 +5155,9 @@
       if (scale.max === scale.min) return padT + innerH / 2;
       return padT + (scale.max - v) * (innerH / (scale.max - scale.min));
     };
-    const n = monthlyData.length;
+    const n = items.length;
     const slotW = innerW / n;
-    const boxW = Math.min(28, slotW * 0.7);
+    const boxW = Math.min(n > 12 ? 20 : 28, slotW * (n > 12 ? 0.62 : 0.7));
     const cxOf = (i) => padL + (i + 0.5) * slotW;
 
     ctx.save();
@@ -3014,7 +5182,7 @@
       ctx.fillText(yFmt(v), padL - 6, padT + (innerH / 4) * i);
     }
 
-    monthlyData.forEach((m, i) => {
+    items.forEach((m, i) => {
       const vals = (m.values || []).filter((v) => Number.isFinite(v));
       const box = summarizeBox(vals);
       drawOneBoxAt(ctx, box, scale, cxOf(i), boxW, padT, innerH);
@@ -3037,12 +5205,37 @@
     });
 
     ctx.fillStyle = "rgba(255,255,255,0.52)";
-    ctx.font = "10px Inter, system-ui, -apple-system";
-    ctx.textAlign = "center";
+    ctx.font = rotateLabels ? "9px Inter, system-ui, -apple-system" : "10px Inter, system-ui, -apple-system";
     ctx.textBaseline = "top";
-    monthlyData.forEach((m, i) => {
-      ctx.fillText(m.month.slice(2), cxOf(i), h - padB + 6);
+    items.forEach((m, i) => {
+      const label = labelFmt(m.label);
+      const cx = cxOf(i);
+      if (rotateLabels) {
+        ctx.save();
+        ctx.translate(cx, h - padB + 6);
+        ctx.rotate(-Math.PI / 3.2);
+        ctx.textAlign = "right";
+        ctx.fillText(label, 0, 0);
+        ctx.restore();
+      } else {
+        ctx.textAlign = "center";
+        ctx.fillText(label, cx, h - padB + 6);
+      }
     });
+  }
+
+  function drawMonthlyBoxWithOutliers(canvas, monthlyData, opts) {
+    const items = (monthlyData || []).map((m) => ({
+      label: m.month.slice(2),
+      values: m.values,
+    }));
+    drawCategoryBoxWithOutliers(canvas, items, opts);
+  }
+
+  function shortPersonLabelForStats(name) {
+    const m = String(name).match(/(?:生信|报告|分析)-(.+)/);
+    if (m) return m[1];
+    return name;
   }
 
   function drawOneBoxAtColored(ctx, box, scale, cx, boxW, padT, innerH, fillStyle) {
@@ -3643,7 +5836,7 @@
   }
 
   function renderPlotService() {
-    const root = $("#view-plot-service");
+    const root = $("#view-tool-service");
     if (!root) return;
 
     const tid = state.plotService.selectedTemplateId ?? "volcano";
@@ -3692,6 +5885,7 @@
   }
 
   function renderAll() {
+    syncAbnormalTasksPipeline();
     renderTime();
     renderKpis();
     renderMiniMetrics();
@@ -3705,6 +5899,10 @@
     renderProductivity();
     renderPlotService();
     renderLabAlpha();
+    renderExtractionCenter();
+    renderNonNgsCenter();
+    renderSampleCenter();
+    renderAbnormalCenter();
   }
 
   function setPaused(paused) {
@@ -3724,16 +5922,41 @@
     }
   }
 
+  const LAB_SUB_ROUTES = new Set(["lab-extraction", "lab-ngs", "lab-non-ngs"]);
+
+  function setLabNavOpen(open) {
+    const grp = $("#navLabGroup");
+    const btn = $("#navLabToggle");
+    const sub = $("#navLabSub");
+    if (!grp || !btn || !sub) return;
+    grp.classList.toggle("is-open", open);
+    btn.setAttribute("aria-expanded", open ? "true" : "false");
+    if (open) sub.removeAttribute("hidden");
+    else sub.setAttribute("hidden", "");
+  }
+
+  function syncLabNavFromRoute(view) {
+    setLabNavOpen(LAB_SUB_ROUTES.has(view));
+  }
+
   function applyRoute() {
-    const hash = location.hash || "#/home";
-    const route = hash.replace("#/","").split("/").filter(Boolean);
+    let hash = location.hash || "#/home";
+    if (hash === "#/module/lab-center") {
+      location.hash = "#/module/lab-ngs";
+      return;
+    }
+    const route = hash.replace("#/", "").split("/").filter(Boolean);
     const view = route[0] === "module" ? route[1] : "home";
 
-    // Activate nav
+    // Activate nav（含子链接；父级按钮无 data-route，由下方单独处理）
     $$(".nav__item").forEach((a) => {
       const r = a.getAttribute("data-route");
+      if (r == null) return;
       a.classList.toggle("is-active", r === view);
     });
+    const navLabParent = $("#navLabToggle");
+    if (navLabParent) navLabParent.classList.toggle("is-active", LAB_SUB_ROUTES.has(view));
+    syncLabNavFromRoute(view);
 
     // Activate view
     $$(".view").forEach((v) => v.classList.remove("is-active"));
@@ -3743,27 +5966,52 @@
     // Titles
     const titleMap = {
       home: ["实验室总览", "样本总览与流程滞留实时监控"],
-      "qc-seq": ["测序下机数据质控", "下机批次质量与异常定位"],
-      "qc-result": ["检测结果质量控制", "规则命中、审核与复测闭环"],
-      productivity: ["人效分析", "吞吐、在制、时长与瓶颈洞察"],
-      "plot-service": ["科研画图服务", "模板化出图、任务队列与交付管理"],
-      "lab-alpha": ["实验室管理 alpha 版", "样本流转、状态查询与异常预警"],
+      "sample-center": ["样本中心", "统一主状态口径 · 概览与查询"],
+      "lab-extraction": ["提取中心", "实验室中心 · 提取等环节"],
+      "lab-ngs": ["二代实验室", "监控台与数据统计（批次、项目、Pool、Run）"],
+      "lab-non-ngs": ["非二代实验室", "监控台与数据统计（按方法学）"],
+      "qc-center": ["质控中心", "测序下机批次质控与异常定位"],
+      "result-center": ["结果中心", "规则命中、审核与复测闭环"],
+      "abnormal-center": ["异常中心", "告警落到任务、任务闭环处理"],
+      analysis: ["管理分析", "TAT 流转时间、人员效能、异常统计"],
+      "tool-service": ["工具服务", "模板化出图、任务队列与交付管理"],
     };
     const [t, s] = titleMap[view] ?? ["智慧化实验室管理系统", "原型页面"];
     setText("pageTitle", t);
     setText("pageSub", s);
 
-    if (view === "qc-result") renderQcResult();
+    if (view === "result-center") renderQcResult();
+    if (view === "abnormal-center") renderAbnormalCenter();
+    if (view === "sample-center") renderSampleCenter();
+    if (view === "lab-ngs") renderLabAlpha();
+    if (view === "lab-extraction") renderExtractionCenter();
+    if (view === "lab-non-ngs") renderNonNgsCenter();
   }
 
   function wireEvents() {
     window.addEventListener("hashchange", applyRoute);
+    const navLabToggle = $("#navLabToggle");
+    if (navLabToggle) {
+      navLabToggle.addEventListener("click", () => {
+        const sub = $("#navLabSub");
+        if (!sub) return;
+        const opened = !sub.hasAttribute("hidden");
+        setLabNavOpen(!opened);
+      });
+    }
     $("#btnPause").addEventListener("click", () => setPaused(!state.paused));
     $("#btnReset").addEventListener("click", () => {
       initSim();
       initQcSeqSim();
       initQcResultSim();
       initProductivitySim();
+      initLabAlphaSim();
+      state.ngs.qcControlAddedByBatch = {};
+      state.ngs.activePoolBatchId = "";
+      state.ngs.activePoolId = "";
+      state.ngs.activePoolProject = "";
+      state.nonNgs.statsMonth = "";
+      rebuildQcLabMapping();
       renderAll();
     });
 
@@ -3778,6 +6026,7 @@
         if (found) {
           state.qcSeq.selectedBatchId = found.id;
           state.qcSeq.selectedSampleId = found.samples[0]?.id ?? null;
+          state.qcSeq.selectedHeatKey = null;
           renderQcSeq();
         }
       }
@@ -3787,6 +6036,7 @@
         state.qcSeq.selectedBatchId = val;
         const b = getSelectedBatch();
         state.qcSeq.selectedSampleId = b?.samples?.[0]?.id ?? null;
+        state.qcSeq.selectedHeatKey = null;
         renderQcSeq();
       }
 
@@ -3849,25 +6099,38 @@
         state.productivity.selectedBatchId = t.value;
         renderProductivity();
       }
-      if (t.matches("#labFilterBarcode")) {
+      if (t.matches("#scFilterBarcode")) {
         state.labAlpha.filters.barcode = t.value || "";
-        state.labAlpha.page = 1;
-        renderLabAlpha();
+        state.sampleCenter.page = 1;
+        renderSampleCenter();
       }
-      if (t.matches("#labFilterDetectNo")) {
+      if (t.matches("#scFilterDetectNo")) {
         state.labAlpha.filters.detectNo = t.value || "";
-        state.labAlpha.page = 1;
-        renderLabAlpha();
+        state.sampleCenter.page = 1;
+        renderSampleCenter();
       }
-      if (t.matches("#labFilterBatchNo")) {
+      if (t.matches("#scFilterBatchNo")) {
         state.labAlpha.filters.batchNo = t.value || "";
-        state.labAlpha.page = 1;
-        renderLabAlpha();
+        state.sampleCenter.page = 1;
+        renderSampleCenter();
       }
-      if (t.matches("#labFilterDueDate")) {
+      if (t.matches("#scFilterDueDate")) {
         state.labAlpha.filters.dueDateLte = t.value || "";
-        state.labAlpha.page = 1;
-        renderLabAlpha();
+        state.sampleCenter.page = 1;
+        renderSampleCenter();
+      }
+
+      if (t.matches("#taskFilterStatus")) {
+        state.tasksUI.filterStatus = t.value || "";
+        renderAbnormalCenter();
+      }
+      if (t.matches("#taskFilterStageKey")) {
+        state.tasksUI.filterStageKey = t.value || "";
+        renderAbnormalCenter();
+      }
+      if (t.matches("#taskFilterAssignee")) {
+        state.tasksUI.filterAssignee = t.value || "";
+        renderAbnormalCenter();
       }
       if (t.matches("#peMonthSelect")) {
         state.productivity.selectedMonth = t.value;
@@ -3889,32 +6152,96 @@
         state.productivity.statsAbnProject = t.getAttribute("value");
         renderProductivity();
       }
+      if (t.matches('input[name="peStatsAbnTaskMonth"]')) {
+        state.productivity.statsAbnTaskMonth = t.getAttribute("value");
+        renderProductivity();
+      }
+
+      if (t.matches('input[name="extStatsScope"]')) {
+        state.extraction.statsScope = t.value;
+        const dayField = $("#extStatsDayField");
+        const monthField = $("#extStatsMonthField");
+        if (dayField) dayField.style.display = t.value === "day" ? "" : "none";
+        if (monthField) monthField.style.display = t.value === "month" ? "" : "none";
+        renderExtractionCenter();
+      }
+      if (t.matches("#extMonitorDate")) {
+        state.extraction.monitorDate = t.value;
+        renderExtractionCenter();
+      }
+      if (t.matches("#extStatsDay")) {
+        state.extraction.statsDay = t.value;
+        renderExtractionCenter();
+      }
+      if (t.matches("#extStatsMonth")) {
+        state.extraction.statsMonth = t.value;
+        renderExtractionCenter();
+      }
+
+      if (t.matches('input[name="ngsBatch"]')) {
+        const b = t.getAttribute("value") || "";
+        if (!b) return;
+        state.ngs.selectedBatchId = b;
+        renderLabAlpha();
+      }
+      if (t.matches('input[name="ngsProject"]')) {
+        const p = t.getAttribute("value") || "";
+        if (!p) return;
+        if (t.checked) state.ngs.selectedProjects.add(p);
+        else state.ngs.selectedProjects.delete(p);
+        if (state.ngs.selectedProjects.size === 0) state.ngs.selectedProjects.add(p);
+        renderLabAlpha();
+      }
+      if (t.matches('input[name="ngsStatsScope"]')) {
+        state.ngs.statsScope = t.getAttribute("value") || "batch";
+        renderLabAlpha();
+      }
+      if (t.matches("#ngsStatsBatchSelect")) {
+        state.ngs.statsBatchNo = t.value || "";
+        renderLabAlpha();
+      }
+      if (t.matches("#ngsStatsMonthInput")) {
+        state.ngs.statsMonth = t.value || currentMonthYM();
+        renderLabAlpha();
+      }
+      if (t.matches("#nonngsStatsMonthInput")) {
+        state.nonNgs.statsMonth = t.value || currentMonthYM();
+        renderNonNgsCenter();
+      }
     });
 
-    const labPrevPage = $("#labPrevPage");
-    if (labPrevPage) {
-      labPrevPage.addEventListener("click", () => {
-        state.labAlpha.page = Math.max(1, (state.labAlpha.page || 1) - 1);
-        renderLabAlpha();
+    const taskFilterAssigneeInput = $("#taskFilterAssignee");
+    if (taskFilterAssigneeInput) {
+      taskFilterAssigneeInput.addEventListener("input", () => {
+        state.tasksUI.filterAssignee = taskFilterAssigneeInput.value || "";
+        renderAbnormalCenter();
       });
     }
-    const labNextPage = $("#labNextPage");
-    if (labNextPage) {
-      labNextPage.addEventListener("click", () => {
-        state.labAlpha.page = (state.labAlpha.page || 1) + 1;
-        renderLabAlpha();
+
+    const scPrevPage = $("#scPrevPage");
+    if (scPrevPage) {
+      scPrevPage.addEventListener("click", () => {
+        state.sampleCenter.page = Math.max(1, (state.sampleCenter.page || 1) - 1);
+        renderSampleCenter();
+      });
+    }
+    const scNextPage = $("#scNextPage");
+    if (scNextPage) {
+      scNextPage.addEventListener("click", () => {
+        state.sampleCenter.page = (state.sampleCenter.page || 1) + 1;
+        renderSampleCenter();
       });
     }
 
     // 水平滚动条与表格联动
-    const labStatusWrap = $("#labStatusTableWrap");
-    const labStatusScrollbar = $("#labStatusScrollbar");
-    if (labStatusWrap && labStatusScrollbar) {
-      labStatusScrollbar.addEventListener("scroll", () => {
-        labStatusWrap.scrollLeft = labStatusScrollbar.scrollLeft;
+    const scStatusWrap = $("#scStatusTableWrap");
+    const scStatusScrollbar = $("#scStatusScrollbar");
+    if (scStatusWrap && scStatusScrollbar) {
+      scStatusScrollbar.addEventListener("scroll", () => {
+        scStatusWrap.scrollLeft = scStatusScrollbar.scrollLeft;
       });
-      labStatusWrap.addEventListener("scroll", () => {
-        labStatusScrollbar.scrollLeft = labStatusWrap.scrollLeft;
+      scStatusWrap.addEventListener("scroll", () => {
+        scStatusScrollbar.scrollLeft = scStatusWrap.scrollLeft;
       });
     }
 
@@ -3922,12 +6249,130 @@
       const target = e.target instanceof Element ? e.target : null;
       if (!target) return;
 
-      if (target.closest("#qcBoxModalClose") || target.closest(".qc-box-modal__backdrop")) {
+      const qcBackdrop = target.closest("#qcBoxModal .qc-box-modal__backdrop");
+      if (target.closest("#qcBoxModalClose") || qcBackdrop) {
         closeBoxModal();
         return;
       }
-      if (target.closest("#qrSpecialChartModalClose") || (target.closest("#qrSpecialChartModal") && target.closest(".qc-box-modal__backdrop"))) {
+      const qrBackdrop = target.closest("#qrSpecialChartModal .qc-box-modal__backdrop");
+      if (target.closest("#qrSpecialChartModalClose") || qrBackdrop) {
         closeSpecialChartModal();
+        return;
+      }
+      const taskBackdrop = target.closest("#taskDetailModal .qc-box-modal__backdrop");
+      if (target.closest("#taskDetailModalClose") || taskBackdrop) {
+        closeTaskDetailModal();
+        return;
+      }
+
+      const extHbBackdrop = target.closest("#extHandoverModal .qc-box-modal__backdrop");
+      if (target.closest("#extHandoverModalClose") || extHbBackdrop) {
+        closeExtHandoverModal();
+        return;
+      }
+      const ngsPoolBackdrop = target.closest("#ngsPoolModal .qc-box-modal__backdrop");
+      if (target.closest("#ngsPoolModalClose") || ngsPoolBackdrop) {
+        closeNgsPoolModal();
+        return;
+      }
+
+      const extTabBtn = target.closest("[data-ext-tab]");
+      if (extTabBtn && $("#view-lab-extraction")?.contains(extTabBtn)) {
+        const tab = extTabBtn.getAttribute("data-ext-tab");
+        if (tab) setExtractionTab(tab);
+        return;
+      }
+      const ngsTabBtn = target.closest("[data-ngs-tab]");
+      if (ngsTabBtn && $("#view-lab-ngs")?.contains(ngsTabBtn)) {
+        const tab = ngsTabBtn.getAttribute("data-ngs-tab");
+        if (tab) setNgsTab(tab);
+        return;
+      }
+      const nonNgsTabBtn = target.closest("[data-nonngs-tab]");
+      if (nonNgsTabBtn && $("#view-lab-non-ngs")?.contains(nonNgsTabBtn)) {
+        const tab = nonNgsTabBtn.getAttribute("data-nonngs-tab");
+        if (tab) setNonNgsTab(tab);
+        return;
+      }
+      const ngsPoolBtn = target.closest("[data-ngs-pool][data-ngs-proj]");
+      if (ngsPoolBtn && $("#view-lab-ngs")?.contains(ngsPoolBtn)) {
+        const pid = ngsPoolBtn.getAttribute("data-ngs-pool");
+        const proj = ngsPoolBtn.getAttribute("data-ngs-proj");
+        if (pid && proj) openNgsPoolModal(pid, proj);
+        return;
+      }
+
+      const hbTile = target.closest("[data-ext-handover]");
+      if (hbTile && $("#view-lab-extraction")?.contains(hbTile)) {
+        const k = hbTile.getAttribute("data-ext-handover");
+        if (k) openExtHandoverModal(k);
+        return;
+      }
+
+      const taskOpenBtn = target.closest(".task-open-btn[data-task-id]");
+      if (taskOpenBtn) {
+        openTaskDetailModal(taskOpenBtn.getAttribute("data-task-id"));
+        return;
+      }
+
+      const taskActionBtn = target.closest(".task-action-btn[data-task-id][data-task-action]");
+      if (taskActionBtn) {
+        const taskId = taskActionBtn.getAttribute("data-task-id");
+        const action = taskActionBtn.getAttribute("data-task-action");
+        const taskKind = taskActionBtn.getAttribute("data-task-kind") || "";
+        const actor = $("#taskActorInput")?.value || "系统";
+        const comment = $("#taskCommentText")?.value || "";
+        const note =
+          taskKind === "handoff"
+            ? "继续流转（分配下一人）"
+            : action === TASK_STATUSES.doing
+              ? "开始处理"
+            : action === TASK_STATUSES.done
+              ? "完成（解决）"
+              : action === TASK_STATUSES.rework
+                ? "返工"
+                : action === TASK_STATUSES.rejected
+                  ? "拒绝（退回）"
+                  : "任务状态更新";
+
+        applyTaskAction(taskId, action, { actor, note, comment });
+        if (taskKind === "handoff") {
+          // 继续流转：不关闭弹窗，便于连续分配下一个人
+          renderTaskDetail(taskId);
+          return;
+        }
+        closeTaskDetailModal();
+        return;
+      }
+
+      const taskCommentBtn = target.closest(".task-comment-add-btn[data-task-id]");
+      if (taskCommentBtn) {
+        const taskId = taskCommentBtn.getAttribute("data-task-id");
+        const actor = $("#taskActorInput")?.value || "系统";
+        const comment = $("#taskCommentText")?.value || "";
+        addTaskComment(taskId, actor, comment);
+        renderTaskDetail(taskId);
+        return;
+      }
+
+      const taskCancelBtn = target.closest(".task-cancel-order-btn[data-task-id]");
+      if (taskCancelBtn) {
+        const taskId = taskCancelBtn.getAttribute("data-task-id");
+        if (taskId && confirm("确认退单？样本将直接归档为「已退单」，工单关闭。")) {
+          terminateTaskAsCancelled(taskId);
+          closeTaskDetailModal();
+        }
+        return;
+      }
+
+      const alertItem = target.closest(".alert[data-alert-stage-key]");
+      if (alertItem) {
+        const stageKey = alertItem.getAttribute("data-alert-stage-key") || "";
+        state.tasksUI.filterStageKey = stageKey;
+        state.tasksUI.filterStatus = "";
+        state.tasksUI.filterAssignee = "";
+        location.hash = "#/module/abnormal-center";
+        renderAbnormalCenter();
         return;
       }
 
@@ -4005,6 +6450,41 @@
       const backdrop = plotPreviewModal.querySelector(".qc-box-modal__backdrop");
       if (backdrop) backdrop.addEventListener("click", closePlotPreviewModal);
     }
+
+    const ngsBtnAddPosCtrl = $("#ngsBtnAddPosCtrl");
+    if (ngsBtnAddPosCtrl) {
+      ngsBtnAddPosCtrl.addEventListener("click", () => {
+        const batchId = state.ngs.activePoolBatchId || state.ngs.selectedBatchId;
+        const project = state.ngs.activePoolProject || "";
+        if (!batchId) return;
+        setNgsQcControlAdded(batchId, project, "pos");
+        renderQcSeq();
+        openNgsPoolModal(state.ngs.activePoolId, project);
+      });
+    }
+    const ngsBtnAddNegCtrl = $("#ngsBtnAddNegCtrl");
+    if (ngsBtnAddNegCtrl) {
+      ngsBtnAddNegCtrl.addEventListener("click", () => {
+        const batchId = state.ngs.activePoolBatchId || state.ngs.selectedBatchId;
+        const project = state.ngs.activePoolProject || "";
+        if (!batchId) return;
+        setNgsQcControlAdded(batchId, project, "neg");
+        renderQcSeq();
+        openNgsPoolModal(state.ngs.activePoolId, project);
+      });
+    }
+
+    const qcPushModal = $("#qcPushExceptionModal");
+    if (qcPushModal) {
+      const backdrop = qcPushModal.querySelector(".qc-box-modal__backdrop");
+      if (backdrop) backdrop.addEventListener("click", closeQcPushExceptionModal);
+    }
+    const qcPushClose = $("#qcPushExceptionModalClose");
+    if (qcPushClose) qcPushClose.addEventListener("click", closeQcPushExceptionModal);
+    const qcPushCancel = $("#qcPushExceptionCancel");
+    if (qcPushCancel) qcPushCancel.addEventListener("click", closeQcPushExceptionModal);
+    const qcPushConfirm = $("#qcPushExceptionConfirm");
+    if (qcPushConfirm) qcPushConfirm.addEventListener("click", confirmQcPushExceptionFromModal);
   }
 
   function main() {
@@ -4013,6 +6493,11 @@
     initQcResultSim();
     initProductivitySim();
     initLabAlphaSim();
+    rebuildQcLabMapping();
+    state.tasks = loadTasksFromStorage();
+    syncAbnormalTasksPipeline();
+    // 演示口径：将所有任务重置为“待分配”
+    resetAllTasksToTodo();
     applyRoute();
     renderAll();
     wireEvents();
