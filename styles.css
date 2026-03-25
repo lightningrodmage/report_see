@@ -1432,12 +1432,49 @@ canvas{ width:100%; height:auto; display:block; }
   color:rgba(240,236,255,0.96);
 }
 
-/* 提取中心 */
-.ext-head{
-  align-items:flex-start;
-  gap:14px;
+/* 实验室中心：左侧子页签 + 主内容 */
+.lab-shell{
+  display:flex;
+  flex-direction:column;
+  gap:0;
 }
-.ext-head .qc__title{ flex: 1; min-width: 0; }
+.lab-shell__title{
+  margin-bottom:14px;
+}
+.lab-shell__title .qc__title{ margin:0; }
+.lab-shell__title .qc__sub{ margin-top:6px; }
+.lab-shell__body{
+  display:flex;
+  align-items:flex-start;
+  gap:16px;
+}
+.lab-shell__rail{
+  flex:0 0 auto;
+  width:132px;
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+  position:sticky;
+  top:88px;
+  align-self:flex-start;
+  padding:2px 0 8px;
+}
+.lab-shell__main{
+  flex:1;
+  min-width:0;
+}
+.lab-shell__rail .ext-tab,
+.lab-shell__rail .ngs-tab,
+.lab-shell__rail .nonngs-tab{
+  display:inline-flex;
+  align-items:center;
+  width:100%;
+  text-align:left;
+  border-radius:12px;
+  justify-content:flex-start;
+}
+
+/* 提取中心 */
 .ext-tabs{
   display:flex;
   flex-wrap:wrap;
@@ -1522,10 +1559,6 @@ canvas{ width:100%; height:auto; display:block; }
 }
 
 /* 二代实验室 */
-.ngs-head{
-  align-items:flex-start;
-  gap:14px;
-}
 .ngs-tabs{
   display:flex;
   gap:8px;
@@ -1594,10 +1627,6 @@ canvas{ width:100%; height:auto; display:block; }
 }
 
 /* 非二代实验室 */
-.nonngs-head{
-  align-items:flex-start;
-  gap:14px;
-}
 .nonngs-tabs{
   display:flex;
   gap:8px;
@@ -1742,6 +1771,26 @@ canvas{ width:100%; height:auto; display:block; }
   .qc-box__grid{ grid-template-columns: repeat(2, minmax(160px, 1fr)); }
   .ext-kpi-grid{ grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .ext-handover-grid{ grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .ext-head{ flex-direction:column; align-items:stretch; }
-  .nonngs-head{ flex-direction:column; align-items:stretch; }
+  .lab-shell__body{
+    flex-direction:column;
+    align-items:stretch;
+  }
+  .lab-shell__rail{
+    position:static;
+    width:100%;
+    flex-direction:row;
+    flex-wrap:wrap;
+    gap:8px;
+    padding-bottom:4px;
+    border-bottom:1px solid rgba(255,255,255,0.08);
+  }
+  .lab-shell__rail .ext-tab,
+  .lab-shell__rail .ngs-tab,
+  .lab-shell__rail .nonngs-tab{
+    width:auto;
+    flex:1 1 auto;
+    min-width:calc(50% - 4px);
+    text-align:center;
+    justify-content:center;
+  }
 }
