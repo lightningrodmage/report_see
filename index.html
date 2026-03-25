@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="./styles.css?v=taskcols-2" />
+    <link rel="stylesheet" href="./styles.css?v=lab-shell-rail" />
   </head>
   <body>
     <div class="app">
@@ -33,19 +33,19 @@
             <span class="nav__dot" aria-hidden="true"></span>
             样本中心
           </a>
-          <div class="nav__group" id="navLabGroup" role="group" aria-label="实验室中心">
+          <div class="nav__group is-open" id="navLabGroup" role="group" aria-label="实验室中心">
             <button
               type="button"
               class="nav__item nav__item--parent"
               id="navLabToggle"
-              aria-expanded="false"
+              aria-expanded="true"
               aria-controls="navLabSub"
             >
               <span class="nav__dot" aria-hidden="true"></span>
               实验室中心
               <span class="nav__chev" aria-hidden="true"></span>
             </button>
-            <div class="nav__sub" id="navLabSub" role="group" aria-label="实验室中心子页面" hidden>
+            <div class="nav__sub" id="navLabSub" role="group" aria-label="实验室中心子页面">
               <a class="nav__item nav__item--sub" href="#/module/lab-extraction" data-route="lab-extraction">
                 <span class="nav__dot" aria-hidden="true"></span>
                 提取中心
@@ -1145,19 +1145,18 @@
           </section>
 
           <section class="view" id="view-lab-extraction" data-view="lab-extraction">
-            <div class="qc">
-              <div class="qc__head ext-head">
-                <div>
-                  <div class="qc__title">提取中心</div>
-                  <div class="qc__sub">实验室中心 · 提取监控、材料统计与交接追踪（数据为模拟，风险样本与异常中心任务同源）</div>
-                </div>
-                <div class="ext-tabs" role="tablist" aria-label="提取中心子页面">
+            <div class="qc lab-shell">
+              <div class="qc__head lab-shell__title">
+                <div class="qc__title">提取中心</div>
+                <div class="qc__sub">实验室中心 · 提取监控、材料统计与交接追踪（数据为模拟，风险样本与异常中心任务同源）</div>
+              </div>
+              <div class="lab-shell__body">
+                <nav class="lab-shell__rail" role="tablist" aria-label="提取中心子页面">
                   <button type="button" class="ext-tab is-active" data-ext-tab="monitor" role="tab" aria-selected="true">监控台</button>
                   <button type="button" class="ext-tab" data-ext-tab="stats" role="tab" aria-selected="false">数据统计</button>
                   <button type="button" class="ext-tab" data-ext-tab="transfer" role="tab" aria-selected="false">交接追踪</button>
-                </div>
-              </div>
-
+                </nav>
+                <div class="lab-shell__main">
               <div class="ext-panel is-active" id="extPanelMonitor" data-ext-panel="monitor">
                 <div class="ext-toolbar">
                   <div class="field field--inline">
@@ -1369,6 +1368,8 @@
                   </div>
                 </div>
               </div>
+                </div>
+              </div>
             </div>
           </section>
 
@@ -1396,18 +1397,17 @@
           </div>
 
           <section class="view" id="view-lab-ngs" data-view="lab-ngs">
-            <div class="qc">
-              <div class="qc__head ngs-head">
-                <div>
-                  <div class="qc__title">二代实验室</div>
-                  <div class="qc__sub">监控台与数据统计（样本状态口径与样本中心一致）</div>
-                </div>
-                <div class="ngs-tabs" role="tablist" aria-label="二代实验室子页面">
+            <div class="qc lab-shell">
+              <div class="qc__head lab-shell__title">
+                <div class="qc__title">二代实验室</div>
+                <div class="qc__sub">监控台与数据统计（样本状态口径与样本中心一致）</div>
+              </div>
+              <div class="lab-shell__body">
+                <nav class="lab-shell__rail" role="tablist" aria-label="二代实验室子页面">
                   <button type="button" class="ngs-tab is-active" data-ngs-tab="monitor" role="tab" aria-selected="true">监控台</button>
                   <button type="button" class="ngs-tab" data-ngs-tab="stats" role="tab" aria-selected="false">数据统计</button>
-                </div>
-              </div>
-
+                </nav>
+                <div class="lab-shell__main">
               <div class="ngs-panel is-active" data-ngs-panel="monitor" id="ngsPanelMonitor">
                 <div class="grid grid--cards ngs-kpi-grid">
                   <div class="card kpi"><div class="kpi__head"><div class="kpi__label">待建库</div></div><div class="kpi__value" id="ngsKpiPendingLib">--</div></div>
@@ -1582,6 +1582,8 @@
                   </div>
                 </div>
               </div>
+                </div>
+              </div>
             </div>
           </section>
 
@@ -1607,18 +1609,17 @@
           </div>
 
           <section class="view" id="view-lab-non-ngs" data-view="lab-non-ngs">
-            <div class="qc">
-              <div class="qc__head nonngs-head">
-                <div>
-                  <div class="qc__title">非二代实验室</div>
-                  <div class="qc__sub">实验室中心 · 按方法学展示监控台与数据统计（异常样本与异常中心同步）</div>
-                </div>
-                <div class="nonngs-tabs" role="tablist" aria-label="非二代实验室子页面">
+            <div class="qc lab-shell">
+              <div class="qc__head lab-shell__title">
+                <div class="qc__title">非二代实验室</div>
+                <div class="qc__sub">实验室中心 · 按方法学展示监控台与数据统计（异常样本与异常中心同步）</div>
+              </div>
+              <div class="lab-shell__body">
+                <nav class="lab-shell__rail" role="tablist" aria-label="非二代实验室子页面">
                   <button type="button" class="nonngs-tab is-active" data-nonngs-tab="monitor" role="tab" aria-selected="true">监控台</button>
                   <button type="button" class="nonngs-tab" data-nonngs-tab="stats" role="tab" aria-selected="false">数据统计</button>
-                </div>
-              </div>
-
+                </nav>
+                <div class="lab-shell__main">
               <div class="nonngs-panel is-active" id="nonngsPanelMonitor" data-nonngs-panel="monitor">
                 <div class="card qc__card">
                   <div class="card__head">
@@ -1720,6 +1721,8 @@
                       <div id="nonngsCancelTable"></div>
                     </div>
                   </div>
+                </div>
+              </div>
                 </div>
               </div>
             </div>

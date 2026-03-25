@@ -5936,7 +5936,7 @@
   }
 
   function syncLabNavFromRoute(view) {
-    setLabNavOpen(LAB_SUB_ROUTES.has(view));
+    if (LAB_SUB_ROUTES.has(view)) setLabNavOpen(true);
   }
 
   function applyRoute() {
