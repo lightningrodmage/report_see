@@ -4,3 +4,6 @@ node_modules/
 .env
 .env.*
 backup_*/
+
+# 本地需求文档模板，不入库
+需求调研访谈记录模板.md
